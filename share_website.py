@@ -110,9 +110,10 @@ def supports_color():
         # On Windows, check if WT_SESSION is set (Windows Terminal) or ConEmuANSI is ON
         # Basic cmd.exe might not support without extra steps (like calling os.system(''))
         return is_a_tty and (os.environ.get('WT_SESSION') is not None or os.environ.get('ConEmuANSI') == 'ON')
-    # For other OS (Linux, macOS), check TERM and isatty
-    term = os.environ.get('TERM', 'dumb')
-    return is_a_tty and term != 'dumb'
+    else:
+        # For other OS (Linux, macOS), check TERM and isatty
+        term = os.environ.get('TERM', 'dumb')
+        return is_a_tty and term != 'dumb'
 
 # Enable colors only if supported
 if not supports_color():
@@ -207,9 +208,12 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
                     break
 
         # --- Construct Target URL ---
-        # Forward the request path directly to the PHP server
-        # The PHP server itself should handle routing based on its document root
-        target_url = f"http://localhost:{self.php_server_port}{self.path}"
+        # Get the base directory name from the full path
+        base_dir_name = os.path.basename(os.path.normpath(self.directory))
+
+        # Forward the request to the PHP server, including the base directory name
+        # This ensures we're accessing the correct directory on the PHP server
+        target_url = f"http://localhost:{self.php_server_port}/{base_dir_name}{self.path}"
 
         # --- Log Proxy Action ---
         # Use log_message for consistent formatting and color
