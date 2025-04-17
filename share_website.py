@@ -28,9 +28,13 @@ import shutil
 import re
 import subprocess
 from http import HTTPStatus
+import time # For potential future use, like delays
 
-# Configuration
+# --- Configuration ---
 VERSION = "1.0.0"  # SiteShare version
+AUTHOR = "SiteShare Team (Modified by demohomex.com)"
+GITHUB_REPO = "https://github.com/naijagamerx/share-website"
+DESIGNED_BY = "demohomex.com"
 
 # Define paths for different web servers and platforms
 WEB_SERVER_PATHS = {
@@ -71,14 +75,54 @@ def find_php_server():
                         response = urllib.request.urlopen(f"http://localhost:{port}", timeout=1)
                         server = response.info().get('Server', '')
                         if 'apache' in server.lower() or 'php' in server.lower() or 'nginx' in server.lower():
-                            print(f"Found PHP-capable server on port {port} ({server})")
-                            return port
-                    except:
+                            # Message is now printed in run_server after confirmation
+                            return port # Return port, message handled later
+                    except Exception:
                         pass  # Not a web server or couldn't connect
-        except:
+        except Exception:
             pass  # Couldn't check this port
 
+    # Message printed in run_server if needed
     return None
+
+# --- ANSI Color Codes ---
+C_RESET = "\033[0m"
+C_BOLD = "\033[1m"
+C_DIM = "\033[2m"
+C_RED = "\033[91m"
+C_GREEN = "\033[92m"
+C_YELLOW = "\033[93m"
+C_BLUE = "\033[94m"
+C_MAGENTA = "\033[95m"
+C_CYAN = "\033[96m"
+C_WHITE = "\033[97m"
+C_BR_WHITE = "\033[1;97m" # Bright White
+
+# Simple check for color support (basic)
+def supports_color():
+    """Check if the terminal likely supports color."""
+    # Check for common CI environments where color might be forced off
+    if os.environ.get('CI') or os.environ.get('TF_BUILD') or os.environ.get('GITHUB_ACTIONS'):
+        return False
+    # Check if running in a standard terminal
+    is_a_tty = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+    if sys.platform == "win32":
+        # On Windows, check if WT_SESSION is set (Windows Terminal) or ConEmuANSI is ON
+        # Basic cmd.exe might not support without extra steps (like calling os.system(''))
+        return is_a_tty and (os.environ.get('WT_SESSION') is not None or os.environ.get('ConEmuANSI') == 'ON')
+    # For other OS (Linux, macOS), check TERM and isatty
+    term = os.environ.get('TERM', 'dumb')
+    return is_a_tty and term != 'dumb'
+
+# Enable colors only if supported
+if not supports_color():
+    C_RESET = C_BOLD = C_DIM = C_RED = C_GREEN = C_YELLOW = C_BLUE = C_MAGENTA = C_CYAN = C_WHITE = C_BR_WHITE = ""
+
+# --- Helper Functions ---
+
+def print_separator(char="─", length=60, color=C_DIM):
+    """Prints a separator line."""
+    print(f"{color}{char * length}{C_RESET}")
 
 def get_local_ip() -> str:
     """
@@ -348,211 +392,149 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
     Returns:
         None
     """
+    abs_dir_initial = os.path.abspath(directory) # Get absolute path early for messages
     try:
-        # Ensure the directory exists before trying to change into it
-        if not os.path.isdir(directory):
-            print(f"Error: Directory not found: {directory}")
+        # Ensure the directory exists
+        if not os.path.isdir(abs_dir_initial):
+            print(f"{C_RED}Error: Directory not found: {C_BOLD}{abs_dir_initial}{C_RESET}")
             sys.exit(1)
-        # os.chdir(directory) # No longer needed, handler uses the directory argument
     except OSError as e:
-        # This check might not be strictly necessary anymore without chdir, but keep for safety
-        print(f"Error accessing directory {directory}: {e}")
+        print(f"{C_RED}Error accessing directory {C_BOLD}{abs_dir_initial}{C_RESET}{C_RED}: {e}{C_RESET}")
         sys.exit(1)
 
-    # Define colors for Windows and Unix-like systems
-    if platform.system().lower() == "windows":
-        # Windows doesn't support ANSI colors in standard console
-        GREEN = ""
-        YELLOW = ""
-        CYAN = ""
-        RED = ""
-        MAGENTA = ""
-        RESET = ""
-        BOLD = ""
-    else:
-        # ANSI color codes for Unix-like systems
-        GREEN = "\033[92m"
-        YELLOW = "\033[93m"
-        CYAN = "\033[96m"
-        RED = "\033[91m"
-        MAGENTA = "\033[95m"
-        RESET = "\033[0m"
-        BOLD = "\033[1m"
-
-    # Determine if we should use PHP mode
+    # --- Determine Server Mode (Static vs PHP Proxy) ---
     php_server_port = None
-    if php_mode:
-        print(f"\n{CYAN}{'=' * 50}{RESET}")
-        print(f"{BOLD}{MAGENTA}PHP MODE{RESET}")
-        print(f"{CYAN}{'=' * 50}{RESET}")
-        print(f"{YELLOW}PHP mode enabled. Checking for a local PHP server...{RESET}")
-        php_server_port = find_php_server()
-        if not php_server_port:
-            print(f"{RED}Warning: No PHP server found. PHP files will not be processed.{RESET}")
-            print(f"{YELLOW}Make sure MAMP, XAMPP, or another PHP server is running.{RESET}")
-            print(f"{YELLOW}Falling back to static file mode.{RESET}")
-            php_mode = False
+    final_php_mode = False # Track if PHP mode is actually used
 
-    # Create the appropriate handler
-    if php_mode and php_server_port:
-        print(f"\n{CYAN}{'=' * 50}{RESET}")
-        print(f"{BOLD}{GREEN}SERVER MODE{RESET}")
-        print(f"{CYAN}{'=' * 50}{RESET}")
-        print(f"{GREEN}Using PHP proxy mode with local server on port {php_server_port}{RESET}")
+    if php_mode:
+        print(f"{C_CYAN}PHP mode requested. Checking for local PHP server...{C_RESET}")
+        php_server_port = find_php_server()
+        if php_server_port:
+            print(f"{C_GREEN}✓ Found PHP-capable server on port {C_BOLD}{php_server_port}{C_RESET}")
+            final_php_mode = True
+        else:
+            print(f"{C_YELLOW}! No running PHP server detected on common ports ({', '.join(map(str, PHP_SERVER_PORTS))}).{C_RESET}")
+            print(f"{C_YELLOW}  Make sure MAMP, XAMPP, or similar is running if you need PHP processing.{C_RESET}")
+            print(f"{C_BLUE}  Falling back to static file serving mode.{C_RESET}")
+            php_mode = False # Force static mode if server not found
+    else:
+         print(f"{C_BLUE}PHP mode not requested. Using static file serving mode.{C_RESET}")
+
+
+    # --- Create the appropriate handler ---
+    if final_php_mode and php_server_port:
+        print(f"{C_GREEN}Using PHP proxy mode (forwarding to localhost:{php_server_port}).{C_RESET}")
         # Create a handler class with the PHP server port
         PHPProxyHandler.php_server_port = php_server_port
         PHPProxyHandler.directory = directory
         PHPProxyHandler.script_dir = os.path.dirname(os.path.abspath(__file__))
         handler = PHPProxyHandler
     else:
-        print(f"\n{CYAN}{'=' * 50}{RESET}")
-        print(f"{BOLD}{GREEN}SERVER MODE{RESET}")
-        print(f"{CYAN}{'=' * 50}{RESET}")
-        print(f"{YELLOW}Using static file mode (PHP files will not be processed){RESET}")
-        # Use our custom static file handler
-        handler = lambda *args, **kwargs: SiteShareHandler(*args, directory=directory, **kwargs)
+        # If PHP mode was requested but failed, this message is already shown
+        if not php_mode: # Only print if PHP wasn't requested initially
+             print(f"{C_GREEN}Using static file mode.{C_RESET}")
+        # Use our custom static file handler, passing the target directory
+        handler = lambda *args, **kwargs: SiteShareHandler(*args, directory=abs_dir_initial, **kwargs)
 
-    # Bind to all interfaces (both IPv4 and IPv6 if available)
-    address = ("", port)
+    # --- Start HTTP Server ---
+    address = ("", port) # Bind to all interfaces
     max_retries = 3
     retries = 0
 
     while retries < max_retries:
         try:
-            # Use TCPServer for proper network handling
+            # Use ThreadingHTTPServer for better handling of multiple requests
             with http.server.ThreadingHTTPServer(address, handler) as httpd:
                 local_ip = get_local_ip()
-                abs_dir = os.path.abspath(directory)
-                # Define colors for Windows and Unix-like systems
-                if platform.system().lower() == "windows":
-                    # Windows doesn't support ANSI colors in standard console
-                    GREEN = ""
-                    YELLOW = ""
-                    CYAN = ""
-                    MAGENTA = ""
-                    RESET = ""
-                    BOLD = ""
-                else:
-                    # ANSI color codes for Unix-like systems
-                    GREEN = "\033[92m"
-                    YELLOW = "\033[93m"
-                    CYAN = "\033[96m"
-                    MAGENTA = "\033[95m"
-                    RESET = "\033[0m"
-                    BOLD = "\033[1m"
+                # abs_dir = os.path.abspath(directory) # Already got abs_dir_initial
 
-                # Server information section
-                print(f"\n{CYAN}{'=' * 50}{RESET}")
-                print(f"{BOLD}{GREEN}SERVER INFORMATION{RESET}")
-                print(f"{CYAN}{'=' * 50}{RESET}")
-                print(f"\n{BOLD}Serving website from directory:{RESET} {abs_dir}")
-                print(f"  - {YELLOW}Access locally (on this machine):{RESET} http://localhost:{port}")
-                print(f"  - {YELLOW}Access on network (other devices):{RESET} http://{local_ip}:{port}")
+                print_separator("═", 60, C_BLUE)
+                print(f"{C_GREEN}Server started successfully!{C_RESET}")
+                print(f"{C_WHITE}Serving from: {C_BOLD}{abs_dir_initial}{C_RESET}")
+                print(f"  {C_CYAN}Local:  {C_BOLD}http://localhost:{port}{C_RESET}")
+                print(f"  {C_CYAN}Network:{C_BOLD} http://{local_ip}:{port}{C_RESET}")
+                print_separator("-", 40, C_DIM)
+                print(f"{C_YELLOW}Important Notes:{C_RESET}")
+                print(f"{C_DIM}  - 'localhost' only works on this machine.{C_RESET}")
+                print(f"{C_DIM}  - Other devices MUST use the Network IP ({local_ip}).{C_RESET}")
+                print(f"{C_DIM}  - Ensure firewall allows connections on port {port}.{C_RESET}")
+                print_separator("═", 60, C_BLUE)
+                print(f"\n{C_MAGENTA}Press {C_BOLD}Ctrl+C{C_RESET}{C_MAGENTA} to stop the server.{C_RESET}")
 
-                # Important notes section
-                print(f"\n{CYAN}{'=' * 50}{RESET}")
-                print(f"{BOLD}{MAGENTA}IMPORTANT NOTES{RESET}")
-                print(f"{CYAN}{'=' * 50}{RESET}")
-                print(f"  - 'localhost' only works on the computer running this script.")
-                print(f"  - Other devices MUST use the network IP address.")
-                print(f"  - Ensure your firewall allows incoming connections on port {port}.")
-
-                print(f"\n{CYAN}{'=' * 50}{RESET}")
-                print(f"{BOLD}Press Ctrl+C to stop the server.{RESET}")
                 httpd.serve_forever() # Blocks here until interrupted
+
         except OSError as e:
-            # Handle common errors across platforms
-            if e.errno in (errno.EADDRINUSE, 98, 48, 10048): # Linux/macOS/Windows 'Address already in use'
+            if e.errno in (errno.EADDRINUSE, 98, 48, 10048): # Address already in use
                 retries += 1
-                print(f"\nError: Port {port} is already in use.")
+                print(f"\n{C_RED}Error: Port {C_BOLD}{port}{C_RESET}{C_RED} is already in use.{C_RESET}")
                 if retries < max_retries:
                     try:
-                        new_port_str = input(f"Enter a different port (attempt {retries}/{max_retries-1}) or press Enter to exit: ")
+                        prompt = (f"{C_YELLOW}Enter a different port (attempt {retries}/{max_retries-1}) "
+                                  f"or press Enter to exit: {C_RESET}")
+                        new_port_str = input(prompt)
                         if not new_port_str:
-                            print("Exiting.")
+                            print(f"{C_BLUE}Exiting.{C_RESET}")
                             sys.exit(1)
                         new_port = int(new_port_str)
                         if 1 <= new_port <= 65535:
                             port = new_port
-                            address = ("0.0.0.0", port) # Update address tuple
+                            address = ("", port) # Update address tuple for next attempt
+                            print(f"{C_BLUE}Retrying with port {C_BOLD}{port}{C_RESET}{C_BLUE}...{C_RESET}")
                         else:
-                            print("Invalid port number. Must be between 1 and 65535.")
-                            # Decrement retries because this wasn't a valid attempt at a new port
-                            retries -=1
+                            print(f"{C_RED}Invalid port number. Must be between 1 and 65535.{C_RESET}")
+                            retries -= 1 # Decrement because this wasn't a valid port attempt
                     except ValueError:
-                        print("Invalid input. Please enter a number.")
-                        # Decrement retries because this wasn't a valid attempt at a new port
-                        retries -=1
+                        print(f"{C_RED}Invalid input. Please enter a number.{C_RESET}")
+                        retries -= 1 # Decrement because this wasn't a valid port attempt
                 else:
-                    print("Maximum retry attempts reached. Exiting.")
-                    sys.exit(1)
-            elif e.errno in (errno.EACCES, 13): # Permission denied (e.g., using < 1024 without root)
-                print(f"\nError: Permission denied to use port {port}.")
-                print("Try a port number above 1024 or run with administrator/root privileges.")
-                sys.exit(1)
+                    print(f"{C_RED}Maximum retry attempts reached. Exiting.{C_RESET}")
+                    sys.exit(1) # Exit after max retries for port conflict
+            elif e.errno in (errno.EACCES, 13): # Permission denied
+                print(f"\n{C_RED}Error: Permission denied to use port {C_BOLD}{port}{C_RESET}{C_RED}.{C_RESET}")
+                print(f"{C_YELLOW}Try a port number above 1024 or run with administrator/root privileges.{C_RESET}")
+                sys.exit(1) # Exit immediately on permission error
             else:
-                # Catch other potential OS errors
-                print(f"\nAn unexpected OS error occurred: {e}")
-                sys.exit(1)
+                # Catch other potential OS errors during server start
+                print(f"\n{C_BOLD}{C_RED}An unexpected OS error occurred: {e}{C_RESET}")
+                sys.exit(1) # Exit on other OS errors
+
         except KeyboardInterrupt:
             # Handle Ctrl+C gracefully
-            print("\nStopping the server...")
+            print(f"\n{C_MAGENTA}Stopping the server...{C_RESET}")
             break # Exit the while loop
+
         except Exception as e:
             # Catch any other unexpected errors during server setup/run
-            print(f"\nAn unexpected error occurred: {e}")
-            sys.exit(1)
+            print(f"\n{C_BOLD}{C_RED}An unexpected error occurred: {e}{C_RESET}")
+            sys.exit(1) # Exit on general errors
 
+    # This part is reached if the loop finishes without starting (e.g., max retries exceeded)
+    # However, sys.exit(1) is called within the loop for port conflicts now.
+    # Keep it just in case, though it might be unreachable.
     if retries >= max_retries:
-         print("Failed to start server after multiple attempts.")
+         print(f"{C_BOLD}{C_RED}Failed to start server after multiple attempts.{C_RESET}")
 
 def print_banner():
+    """Prints the application banner with ASCII art and metadata."""
+    # Block ASCII art for "Site Share" with more stylized design
+    banner_art = f"""
+{C_CYAN}╔═══════════════════════════════════════════════════════════════════════╗{C_RESET}
+{C_CYAN}║ ███████╗██╗████████╗███████╗    ███████╗██╗  ██╗ █████╗ ██████╗ ███████╗ ║{C_RESET}
+{C_CYAN}║ ██╔════╝██║╚══██╔══╝██╔════╝    ██╔════╝██║  ██║██╔══██╗██╔══██╗██╔════╝ ║{C_RESET}
+{C_CYAN}║ ███████╗██║   ██║   █████╗      ███████╗███████║███████║██████╔╝█████╗   ║{C_RESET}
+{C_CYAN}║ ╚════██║██║   ██║   ██╔══╝      ╚════██║██╔══██║██╔══██║██╔══██╗██╔══╝   ║{C_RESET}
+{C_CYAN}║ ███████║██║   ██║   ███████╗    ███████║██║  ██║██║  ██║██║  ██║███████╗ ║{C_RESET}
+{C_CYAN}║ ╚══════╝╚═╝   ╚═╝   ╚══════╝    ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝ ║{C_RESET}
+{C_CYAN}╚═══════════════════════════════════════════════════════════════════════╝{C_RESET}
     """
-    Print a banner with the SiteShare name and version.
-    """
-    # Define colors for Windows and Unix-like systems
-    if platform.system().lower() == "windows":
-        # Windows doesn't support ANSI colors in standard console
-        # We'll use simple text for Windows
-        BLUE = ""
-        GREEN = ""
-        YELLOW = ""
-        CYAN = ""
-        RED = ""
-        MAGENTA = ""
-        RESET = ""
-        BOLD = ""
-    else:
-        # ANSI color codes for Unix-like systems
-        BLUE = "\033[94m"
-        GREEN = "\033[92m"
-        YELLOW = "\033[93m"
-        CYAN = "\033[96m"
-        RED = "\033[91m"
-        MAGENTA = "\033[95m"
-        RESET = "\033[0m"
-        BOLD = "\033[1m"
-
-    # ASCII art for "Site Share"
-    print(f"{CYAN}")
-    print("  ____  _ _        ____  _                   ")
-    print(" / ___|(_) |_ ___|/ ___|| |__   __ _ _ __ ___ ")
-    print(" \___ \| | __/ _ \\___ \| '_ \ / _` | '__/ _ \\")
-    print("  ___) | | ||  __/___) | | | | (_| | | |  __/")
-    print(" |____/|_|\__\___|____/|_| |_|\__,_|_|  \___|")
-    print(f"{RESET}")
-
-    # Attribution and version info
-    print(f"{YELLOW}╔═══════════════════════════════════════════╗{RESET}")
-    print(f"{YELLOW}║{RESET}                                           {YELLOW}║{RESET}")
-    print(f"{YELLOW}║{RESET}   {BOLD}SiteShare v{VERSION}{RESET}                        {YELLOW}║{RESET}")
-    print(f"{YELLOW}║{RESET}   {GREEN}Local Website Sharing Tool{RESET}              {YELLOW}║{RESET}")
-    print(f"{YELLOW}║{RESET}                                           {YELLOW}║{RESET}")
-    print(f"{YELLOW}╚═══════════════════════════════════════════╝{RESET}")
-    print(f"    {MAGENTA}Designed by{RESET}: {CYAN}demohomex.com{RESET}")
-    print(f"    {MAGENTA}Author{RESET}: {CYAN}naijagamerx{RESET}")
-    print(f"    {MAGENTA}GitHub{RESET}: {CYAN}https://github.com/naijagamerx/share-website{RESET}")
-    print("")
+    print(banner_art)
+    print(f"{C_MAGENTA}╔═════════════════════ {C_BOLD}Local Website Sharing Tool{C_RESET}{C_MAGENTA} ═════════════════════╗{C_RESET}")
+    print(f"{C_MAGENTA}║{C_RESET} {C_WHITE}Version: {C_BOLD}{VERSION}{C_RESET}                                                {C_MAGENTA}║{C_RESET}")
+    print(f"{C_MAGENTA}║{C_RESET} {C_WHITE}Author: {C_BOLD}{AUTHOR}{C_RESET}                                          {C_MAGENTA}║{C_RESET}")
+    print(f"{C_MAGENTA}║{C_RESET} {C_WHITE}Designed by: {C_BOLD}{DESIGNED_BY}{C_RESET}                                {C_MAGENTA}║{C_RESET}")
+    print(f"{C_MAGENTA}║{C_RESET} {C_WHITE}GitHub: {C_DIM}{GITHUB_REPO}{C_RESET}                {C_MAGENTA}║{C_RESET}")
+    print(f"{C_MAGENTA}╚═══════════════════════════════════════════════════════════════════════╝{C_RESET}")
+    print() # Add a blank line after the banner
 
 def main():
     """
@@ -604,16 +586,19 @@ def main():
     )
     args = parser.parse_args()
 
-    # Print system information
-    print(f"System: {platform.system()} {platform.release()}")
-    print(f"Python: {platform.python_version()}")
+    # --- System Information ---
+    print(f"{C_MAGENTA}System Info:{C_RESET}")
+    print(f"  OS:     {C_WHITE}{platform.system()} {platform.release()}{C_RESET}")
+    print(f"  Python: {C_WHITE}{platform.python_version()}{C_RESET}")
+    print_separator()
 
-    # Validate port range
+    # --- Validate Port ---
     if not (1 <= args.port <= 65535):
-        print(f"Error: Invalid port number {args.port}. Must be between 1 and 65535.")
+        print(f"{C_RED}Error: Invalid port number {C_BOLD}{args.port}{C_RESET}{C_RED}. Must be between 1 and 65535.{C_RESET}")
         return 1
 
-    # Determine directory to serve
+    # --- Determine Directory ---
+    print(f"{C_MAGENTA}Directory Selection:{C_RESET}")
     target_dir = args.dir
     if not target_dir:
         # Get the appropriate web server paths for the current platform
@@ -640,94 +625,70 @@ def main():
             except (FileNotFoundError, PermissionError):
                 pass
 
-        # Define colors for Windows and Unix-like systems
-        if platform.system().lower() == "windows":
-            # Windows doesn't support ANSI colors in standard console
-            GREEN = ""
-            YELLOW = ""
-            CYAN = ""
-            BLUE = ""
-            MAGENTA = ""
-            RED = ""
-            RESET = ""
-            BOLD = ""
-        else:
-            # ANSI color codes for Unix-like systems
-            GREEN = "\033[92m"
-            YELLOW = "\033[93m"
-            CYAN = "\033[96m"
-            BLUE = "\033[94m"
-            MAGENTA = "\033[95m"
-            RED = "\033[91m"
-            RESET = "\033[0m"
-            BOLD = "\033[1m"
-
         if not all_sites:
-            print(f"\n{RED}No websites found in common web server directories.{RESET}")
-            print(f"{YELLOW}Please specify a directory with --dir option.{RESET}")
+            print(f"{C_YELLOW}! No websites found in common web server directories: {C_DIM}{', '.join(WEB_SERVER_PATHS.get(system, []))}{C_RESET}")
+            print(f"{C_YELLOW}  Please specify a directory using the {C_BOLD}--dir{C_RESET}{C_YELLOW} option.{C_RESET}")
             return 1
 
-        print(f"\n{CYAN}{'=' * 50}{RESET}")
-        print(f"{BOLD}{BLUE}AVAILABLE WEBSITES{RESET}")
-        print(f"{CYAN}{'=' * 50}{RESET}")
-
+        print(f"{C_CYAN}Available websites found:{C_RESET}")
         for i, (path, site) in enumerate(all_sites, 1):
-            print(f"{CYAN}{i}.{RESET} {BOLD}{site}{RESET} {YELLOW}(in {path}){RESET}")
+            print(f"  {C_GREEN}{i}{C_RESET}. {C_BOLD}{site}{C_RESET} {C_DIM}(in {path}){C_RESET}")
 
-        selection = input(f"\n{GREEN}Enter site number (or 'x' to cancel):{RESET} ").strip()
+        selection = input(f"\n{C_YELLOW}Enter site number to share (or 'x' to cancel): {C_RESET}").strip()
         if selection.lower() == 'x':
-            print("Cancelled.")
+            print(f"{C_BLUE}Operation cancelled by user.{C_RESET}")
             return 0
 
         try:
             selected_idx = int(selection) - 1
             path, site = all_sites[selected_idx]
             target_dir = os.path.join(path, site)
+            print(f"{C_GREEN}✓ Selected: {C_BOLD}{site}{C_RESET}")
         except (ValueError, IndexError):
-            print("Invalid selection")
+            print(f"{C_RED}Error: Invalid selection.{C_RESET}")
             return 1
     else:
         # Use explicitly specified directory
         target_dir = os.path.abspath(target_dir)
+        print(f"{C_CYAN}Using specified directory: {C_BOLD}{target_dir}{C_RESET}")
 
-    # Security warnings
-    # Define colors for Windows and Unix-like systems
-    if platform.system().lower() == "windows":
-        # Windows doesn't support ANSI colors in standard console
-        RED = ""
-        YELLOW = ""
-        RESET = ""
-        BOLD = ""
-    else:
-        # ANSI color codes for Unix-like systems
-        RED = "\033[91m"
-        YELLOW = "\033[93m"
-        RESET = "\033[0m"
-        BOLD = "\033[1m"
+    print_separator()
 
-    print(f"\n{RED}{'#' * 50}{RESET}")
-    print(f"{RED}#{' ' * 10}{BOLD}WARNING: NETWORK EXPOSURE{RESET}{RED}{' ' * 9}#{RESET}")
-    print(f"{RED}{'#' * 50}{RESET}")
-    print(f"{RED}# {RESET}This script makes the specified directory:")
-    print(f"{RED}# {RESET} '{YELLOW}{target_dir}{RESET}'")
-    print(f"{RED}# {RESET}accessible to {BOLD}ALL{RESET} devices on your local network.")
-    print(f"{RED}#{RESET}")
-    print(f"{RED}# {RESET}- Ensure you trust your network environment.")
-    print(f"{RED}# {RESET}- Do {BOLD}NOT{RESET} serve directories containing sensitive data.")
-    print(f"{RED}# {RESET}- Stop the server (Ctrl+C) when finished.")
-    print(f"{RED}{'#' * 50}{RESET}\n")
+    # --- Security Warning ---
+    print(f"{C_BOLD}{C_YELLOW}############################################{C_RESET}")
+    print(f"{C_BOLD}{C_YELLOW}#          WARNING: NETWORK EXPOSURE         #{C_RESET}")
+    print(f"{C_BOLD}{C_YELLOW}############################################{C_RESET}")
+    print(f"{C_YELLOW}# This script makes the directory:{C_RESET}")
+    print(f"{C_YELLOW}#  '{C_BOLD}{target_dir}{C_RESET}{C_YELLOW}'{C_RESET}")
+    print(f"{C_YELLOW}# accessible to {C_BOLD}ALL{C_RESET}{C_YELLOW} devices on your local network.{C_RESET}")
+    print(f"{C_YELLOW}#{C_RESET}")
+    print(f"{C_YELLOW}# - Ensure you trust your network environment.{C_RESET}")
+    print(f"{C_YELLOW}# - Do {C_BOLD}NOT{C_RESET}{C_YELLOW} serve directories containing sensitive data.{C_RESET}")
+    print(f"{C_YELLOW}# - Stop the server ({C_BOLD}Ctrl+C{C_RESET}{C_YELLOW}) when finished.{C_RESET}")
+    print(f"{C_BOLD}{C_YELLOW}############################################{C_RESET}\n")
 
+    # --- Start Server ---
+    print(f"{C_MAGENTA}Starting Server...{C_RESET}")
     try:
-        # Start the server
         run_server(directory=target_dir, port=args.port, php_mode=args.php)
-        print("\nServer stopped.")
+        print(f"\n{C_BLUE}Server stopped gracefully.{C_RESET}")
         return 0
     except KeyboardInterrupt:
-        print("\nServer stopped by user.")
+        # Already handled in run_server, but catch here too for clean exit
+        print(f"\n{C_BLUE}Server stopped by user.{C_RESET}")
         return 0
+    except SystemExit:
+         # Allow sys.exit() calls within run_server to propagate
+         pass
     except Exception as e:
-        print(f"\nError: {e}")
+        print(f"\n{C_BOLD}{C_RED}An unexpected error occurred in main: {e}{C_RESET}")
         return 1
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Ensure clean exit on Ctrl+C before server starts
+    try:
+        exit_code = main()
+        sys.exit(exit_code)
+    except KeyboardInterrupt:
+        print(f"\n{C_BLUE}Operation cancelled by user.{C_RESET}")
+        sys.exit(1)
