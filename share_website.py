@@ -218,35 +218,56 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
                     break
 
         # --- Construct Target URL ---
-        # Get the base directory name from the full path
-        base_dir_name = os.path.basename(os.path.normpath(self.directory))
+        # For PHP mode, we need to construct a URL that the PHP server will understand
+        # This means we need to map our directory to a URL path that the PHP server recognizes
 
-        # Check if the directory is in a web server path
-        is_in_web_root = False
-        web_root_path = ""
+        # Get the absolute path of the directory we're serving
         abs_dir = os.path.abspath(self.directory)
 
-        # Check all possible web server paths
-        for platform_paths in WEB_SERVER_PATHS.values():
-            for path in platform_paths:
-                if abs_dir.startswith(os.path.abspath(path)):
-                    is_in_web_root = True
-                    web_root_path = os.path.abspath(path)
-                    break
-            if is_in_web_root:
-                break
+        # Check if we're in a known web server document root
+        is_in_web_root = False
+        web_root_path = ""
 
-        # Construct the target URL based on whether the directory is in a web server path
+        # Check all possible web server paths for the current platform
+        platform_key = sys.platform
+        if platform_key not in WEB_SERVER_PATHS:
+            # If platform not found, try a fallback
+            if platform_key.startswith('win'):
+                platform_key = 'windows'
+            elif platform_key.startswith('darwin'):
+                platform_key = 'darwin'
+            elif platform_key.startswith('linux'):
+                platform_key = 'linux'
+
+        # Now check the paths for this platform
+        if platform_key in WEB_SERVER_PATHS:
+            for path in WEB_SERVER_PATHS[platform_key]:
+                abs_path = os.path.abspath(path)
+                if abs_dir.startswith(abs_path):
+                    is_in_web_root = True
+                    web_root_path = abs_path
+                    self.log_message(f"Found web root: {web_root_path}")
+                    break
+
+        # Construct the target URL
         if is_in_web_root:
-            # Calculate the relative path from the web root
+            # We're in a web server document root, so we can calculate the relative path
             rel_path = os.path.relpath(abs_dir, web_root_path)
             # Replace backslashes with forward slashes for URLs
             rel_path = rel_path.replace('\\', '/')
+            # Make sure the path doesn't start or end with a slash
+            rel_path = rel_path.strip('/')
             # Forward the request to the PHP server with the relative path
-            target_url = f"http://localhost:{self.php_server_port}/{rel_path}{self.path}"
+            if rel_path:
+                target_url = f"http://localhost:{self.php_server_port}/{rel_path}{self.path}"
+            else:
+                # We're at the web root itself
+                target_url = f"http://localhost:{self.php_server_port}{self.path}"
             self.log_message(f"Directory is in web root: {web_root_path}, relative path: {rel_path}")
         else:
-            # Not in web root, use the base directory name directly
+            # Not in a known web root, try using the directory name directly
+            # This might not work if the PHP server doesn't have this directory in its document root
+            base_dir_name = os.path.basename(os.path.normpath(abs_dir))
             target_url = f"http://localhost:{self.php_server_port}/{base_dir_name}{self.path}"
             self.log_message(f"Directory is not in a known web root, using base name: {base_dir_name}")
 
@@ -507,8 +528,8 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
         PHPProxyHandler.php_server_port = php_server_port
         PHPProxyHandler.directory = directory
         PHPProxyHandler.script_dir = os.path.dirname(os.path.abspath(__file__))
-        # Use a lambda to create a new instance of PHPProxyHandler for each request
-        handler = lambda *args, **kwargs: PHPProxyHandler(*args, **kwargs)
+        # Use the PHPProxyHandler class directly
+        handler = PHPProxyHandler
     else:
         # If PHP mode was requested but failed, this message is already shown
         if not php_mode: # Only print if PHP wasn't requested initially
