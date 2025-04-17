@@ -507,7 +507,8 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
         PHPProxyHandler.php_server_port = php_server_port
         PHPProxyHandler.directory = directory
         PHPProxyHandler.script_dir = os.path.dirname(os.path.abspath(__file__))
-        handler = PHPProxyHandler
+        # Use a lambda to create a new instance of PHPProxyHandler for each request
+        handler = lambda *args, **kwargs: PHPProxyHandler(*args, **kwargs)
     else:
         # If PHP mode was requested but failed, this message is already shown
         if not php_mode: # Only print if PHP wasn't requested initially
