@@ -154,7 +154,9 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.path.endswith('.php') and '?' not in self.path:
             target_url += '?siteshare=1'  # Add a dummy parameter to ensure PHP processing
 
-        print(f"Proxying {method} request for {self.path} to {target_url}") # Debug
+        # Only print debug info for PHP files or errors
+        if self.path.endswith('.php'):
+            print(f"Proxying {method} request for {self.path} to {target_url}") # Debug
 
         try:
             # Create a request to the PHP server
@@ -178,18 +180,21 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             )
 
             # Send the request to the PHP server
-            print(f"Sending request to PHP server: {target_url}") # Debug
+            if self.path.endswith('.php'):
+                print(f"Sending request to PHP server: {target_url}") # Debug
             with urllib.request.urlopen(req) as response:
                 # Copy the response status and headers
                 self.send_response(response.status)
-                print(f"PHP server responded with status: {response.status}") # Debug
+                if self.path.endswith('.php'):
+                    print(f"PHP server responded with status: {response.status}") # Debug
 
                 # Set content type based on file extension for PHP files
                 content_type = None
                 for header, value in response.getheaders():
                     if header.lower() == 'content-type':
                         content_type = value
-                        print(f"Content-Type from PHP server: {value}") # Debug
+                        if self.path.endswith('.php'):
+                            print(f"Content-Type from PHP server: {value}") # Debug
                     if header.lower() not in ('transfer-encoding', 'connection'):
                         self.send_header(header, value)
 
