@@ -181,12 +181,21 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
         super().__init__(*args, **kwargs)
 
     def do_GET(self):
+        # Special handling for PHP files
+        if self.path.endswith('.php'):
+            self.log_message(f"PHP file detected in GET: {self.path}")
         return self.proxy_request('GET')
 
     def do_POST(self):
+        # Special handling for PHP files
+        if self.path.endswith('.php'):
+            self.log_message(f"PHP file detected in POST: {self.path}")
         return self.proxy_request('POST')
 
     def do_HEAD(self):
+        # Special handling for PHP files
+        if self.path.endswith('.php'):
+            self.log_message(f"PHP file detected in HEAD: {self.path}")
         return self.proxy_request('HEAD')
 
     def proxy_request(self, method):
@@ -565,8 +574,16 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
         PHPProxyHandler.php_server_port = php_server_port
         PHPProxyHandler.directory = directory
         PHPProxyHandler.script_dir = os.path.dirname(os.path.abspath(__file__))
-        # Use the PHPProxyHandler class directly
-        handler = PHPProxyHandler
+        # Use a custom handler factory to ensure each request gets a fresh handler instance
+        def handler_factory(*args, **kwargs):
+            handler = PHPProxyHandler(*args, **kwargs)
+            # Force PHP mode for all requests
+            handler.php_server_port = php_server_port
+            handler.directory = directory
+            handler.script_dir = os.path.dirname(os.path.abspath(__file__))
+            return handler
+
+        handler = handler_factory
     else:
         # If PHP mode was requested but failed, this message is already shown
         if not php_mode: # Only print if PHP wasn't requested initially
