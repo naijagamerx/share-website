@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Site Share Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #2c3e50;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Site Share Test Page</h1>
+    <div class="success">
+        <p><strong>Success!</strong> If you can see this page, the server is working correctly.</p>
+    </div>
+    <p>This is a test page to verify that the site sharing functionality is working properly.</p>
+    <p>Server time: <span id="server-time"></span></p>
+
+    <script>
+        document.getElementById('server-time').textContent = new Date().toLocaleString();
+    </script>
+</body>
+</html>

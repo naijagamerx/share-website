@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+"""
+SiteShare - A simple tool to share local websites across your network.
+
+This script allows you to easily share a local directory (like a website) with other
+devices on your local network. It automatically detects your local IP address and
+starts a web server that makes the directory accessible to all devices on the network.
+
+It's particularly useful for web developers who need to test their sites on multiple
+devices, or for quickly sharing files between computers on the same network.
+
+Author: SiteShare Team
+License: MIT
+Repository: https://github.com/naijagamerx/share-website
+"""
+
+import http.server
+import socket
+import argparse
+import os
+import sys
+import errno  # Import errno for cross-platform error codes
+import platform
+
+# Configuration
+VERSION = "1.0.0"  # SiteShare version
+
+# Define paths for different web servers and platforms
+WEB_SERVER_PATHS = {
+    "windows": [
+        "c:/MAMP/htdocs/",      # MAMP on Windows
+        "c:/xampp/htdocs/",     # XAMPP on Windows
+        "c:/wamp/www/",         # WAMP on Windows
+        "c:/wamp64/www/"        # WAMP64 on Windows
+    ],
+    "darwin": [                # macOS
+        "/Applications/MAMP/htdocs/",
+        "/opt/lampp/htdocs/"   # XAMPP on macOS
+    ],
+    "linux": [
+        "/opt/lampp/htdocs/",  # XAMPP on Linux
+        "/var/www/html/"       # Default Apache on Linux
+    ]
+}
+
+def get_local_ip() -> str:
+    """
+    Detect the local IP address of the machine.
+
+    This function attempts multiple methods to determine the local IP address
+    that would be used to connect to external hosts. It has fallback mechanisms
+    in case the primary method fails.
+
+    Returns:
+        str: The detected local IP address (e.g., '192.168.1.100')
+              or '127.0.0.1' if detection fails
+    """
+    s = None  # Initialize socket to None
+    try:
+        # Primary method: Create a temporary socket to get the IP address
+        # that would be used to connect to an external host
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Doesn't actually send data, just establishes a potential connection route
+        s.connect(("8.8.8.8", 80))  # Google's public DNS server
+        local_ip = s.getsockname()[0]
+    except OSError:  # Handle cases where the network might be down or host unreachable
+        try:
+            # Fallback 1: Get IP associated with the hostname
+            local_ip = socket.gethostbyname(socket.gethostname())
+        except socket.gaierror:
+            # Fallback 2: If hostname resolution fails, use loopback
+            local_ip = "127.0.0.1"
+    finally:
+        if s:
+            s.close()
+    return local_ip
+
+class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
+    """
+    Custom request handler for SiteShare.
+
+    This handler serves a welcome page if the root directory is accessed and
+    provides information about the server via a special JSON endpoint.
+    """
+    def __init__(self, *args, directory=None, **kwargs):
+        self.directory = directory
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        super().__init__(*args, directory=directory, **kwargs)
+
+    def do_GET(self):
+        # Special endpoint to get server information
+        if self.path == '/siteshare-info.json':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            info = {
+                'directory': os.path.abspath(self.directory),
+                'version': VERSION
+            }
+            self.wfile.write(bytes(str(info).replace("'", '"'), 'utf-8'))
+            return
+
+        # Serve welcome page for root requests if welcome.html exists in script directory
+        if self.path == '/' or self.path == '/index.html':
+            welcome_path = os.path.join(self.script_dir, 'welcome.html')
+            if os.path.exists(welcome_path):
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                with open(welcome_path, 'rb') as file:
+                    self.wfile.write(file.read())
+                return
+
+        # For all other requests, use the standard behavior
+        return super().do_GET()
+
+def run_server(directory: str = ".", port: int = 8000) -> None:
+    """
+    Starts a simple HTTP server, handling port conflicts and permissions.
+
+    This function changes to the specified directory and starts an HTTP server
+    that makes the directory accessible over the network. It includes error handling
+    for common issues like port conflicts and permission problems.
+
+    Args:
+        directory (str): The directory to serve (default: current directory)
+        port (int): The port to serve on (default: 8000)
+
+    Returns:
+        None
+    """
+    try:
+        # Ensure the directory exists before trying to change into it
+        if not os.path.isdir(directory):
+            print(f"Error: Directory not found: {directory}")
+            sys.exit(1)
+        os.chdir(directory)
+    except OSError as e:
+        print(f"Error changing to directory {directory}: {e}")
+        sys.exit(1)
+
+    # Use our custom handler
+    handler = lambda *args, **kwargs: SiteShareHandler(*args, directory=directory, **kwargs)
+    # Bind to all interfaces (both IPv4 and IPv6 if available)
+    address = ("", port)
+    max_retries = 3
+    retries = 0
+
+    while retries < max_retries:
+        try:
+            # Use TCPServer for proper network handling
+            with http.server.ThreadingHTTPServer(address, handler) as httpd:
+                local_ip = get_local_ip()
+                abs_dir = os.path.abspath(directory)
+                print(f"\nServing website from directory: {abs_dir}")
+                print(f"  - Access locally (on this machine): http://localhost:{port}")
+                print(f"  - Access on network (other devices): http://{local_ip}:{port}")
+                print("\nImportant:")
+                print("  - 'localhost' only works on the computer running this script.")
+                print("  - Other devices MUST use the network IP address.")
+                print("  - Ensure your firewall allows incoming connections on port {port}.")
+                print("\nPress Ctrl+C to stop the server.")
+                httpd.serve_forever() # Blocks here until interrupted
+        except OSError as e:
+            # Handle common errors across platforms
+            if e.errno in (errno.EADDRINUSE, 98, 48, 10048): # Linux/macOS/Windows 'Address already in use'
+                retries += 1
+                print(f"\nError: Port {port} is already in use.")
+                if retries < max_retries:
+                    try:
+                        new_port_str = input(f"Enter a different port (attempt {retries}/{max_retries-1}) or press Enter to exit: ")
+                        if not new_port_str:
+                            print("Exiting.")
+                            sys.exit(1)
+                        new_port = int(new_port_str)
+                        if 1 <= new_port <= 65535:
+                            port = new_port
+                            address = ("0.0.0.0", port) # Update address tuple
+                        else:
+                            print("Invalid port number. Must be between 1 and 65535.")
+                            # Decrement retries because this wasn't a valid attempt at a new port
+                            retries -=1
+                    except ValueError:
+                        print("Invalid input. Please enter a number.")
+                        # Decrement retries because this wasn't a valid attempt at a new port
+                        retries -=1
+                else:
+                    print("Maximum retry attempts reached. Exiting.")
+                    sys.exit(1)
+            elif e.errno in (errno.EACCES, 13): # Permission denied (e.g., using < 1024 without root)
+                print(f"\nError: Permission denied to use port {port}.")
+                print("Try a port number above 1024 or run with administrator/root privileges.")
+                sys.exit(1)
+            else:
+                # Catch other potential OS errors
+                print(f"\nAn unexpected OS error occurred: {e}")
+                sys.exit(1)
+        except KeyboardInterrupt:
+            # Handle Ctrl+C gracefully
+            print("\nStopping the server...")
+            break # Exit the while loop
+        except Exception as e:
+            # Catch any other unexpected errors during server setup/run
+            print(f"\nAn unexpected error occurred: {e}")
+            sys.exit(1)
+
+    if retries >= max_retries:
+         print("Failed to start server after multiple attempts.")
+
+def print_banner():
+    """
+    Print a banner with the SiteShare name and version.
+    """
+    print(f"""
+╔═══════════════════════════════════════════╗
+║                                           ║
+║   SiteShare v{VERSION}                        ║
+║   Local Website Sharing Tool              ║
+║                                           ║
+╚═══════════════════════════════════════════╝
+    """)
+
+def main():
+    """
+    Main entry point for the SiteShare application.
+
+    This function handles command-line argument parsing, directory selection,
+    and starting the server. It's designed to be called both as a script and
+    as an entry point when installed as a package.
+
+    Returns:
+        int: Exit code (0 for success, non-zero for errors)
+    """
+    # Print banner
+    print_banner()
+
+    # Setup command-line argument parsing with examples
+    parser = argparse.ArgumentParser(
+        description="Easily share a local website directory on your network.",
+        epilog="Examples:\n"
+               "  python share_website.py                   # Serve current directory on port 8000\n"
+               "  python share_website.py --port 8080       # Serve current directory on port 8080\n"
+               "  python share_website.py --dir ./public    # Serve './public' directory on port 8000\n"
+               "  python share_website.py --dir /var/www --port 80 # Serve '/var/www' on port 80 (might need sudo/admin)",
+        formatter_class=argparse.RawDescriptionHelpFormatter # Keep epilog formatting
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port number to serve the website on (default: 8000)."
+    )
+    parser.add_argument(
+        "--dir",
+        type=str,
+        default=None,
+        help="[Optional] Specific directory to serve (overrides site selection)"
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"SiteShare {VERSION}",
+        help="Show the version number and exit"
+    )
+    args = parser.parse_args()
+
+    # Print system information
+    print(f"System: {platform.system()} {platform.release()}")
+    print(f"Python: {platform.python_version()}")
+
+    # Validate port range
+    if not (1 <= args.port <= 65535):
+        print(f"Error: Invalid port number {args.port}. Must be between 1 and 65535.")
+        return 1
+
+    # Determine directory to serve
+    target_dir = args.dir
+    if not target_dir:
+        # Get the appropriate web server paths for the current platform
+        system = platform.system().lower()
+        if system == "darwin":
+            system = "darwin"  # macOS
+        elif system == "windows":
+            system = "windows"
+        else:
+            system = "linux"  # Default to Linux for other systems
+
+        # Try to find websites in common web server directories
+        all_sites = []
+        found_paths = []
+
+        for path in WEB_SERVER_PATHS.get(system, []):
+            try:
+                if os.path.isdir(path):
+                    sites = [name for name in os.listdir(path)
+                            if os.path.isdir(os.path.join(path, name))]
+                    if sites:
+                        all_sites.extend([(path, site) for site in sites])
+                        found_paths.append(path)
+            except (FileNotFoundError, PermissionError):
+                pass
+
+        if not all_sites:
+            print("\nNo websites found in common web server directories.")
+            print("Please specify a directory with --dir option.")
+            return 1
+
+        print("\nAvailable websites:")
+        for i, (path, site) in enumerate(all_sites, 1):
+            print(f"{i}. {site} (in {path})")
+
+        selection = input("\nEnter site number (or 'x' to cancel): ").strip()
+        if selection.lower() == 'x':
+            print("Cancelled.")
+            return 0
+
+        try:
+            selected_idx = int(selection) - 1
+            path, site = all_sites[selected_idx]
+            target_dir = os.path.join(path, site)
+        except (ValueError, IndexError):
+            print("Invalid selection")
+            return 1
+    else:
+        # Use explicitly specified directory
+        target_dir = os.path.abspath(target_dir)
+
+    # Security warnings
+    print("\n############################################")
+    print("#          WARNING: NETWORK EXPOSURE         #")
+    print("############################################")
+    print("# This script makes the specified directory:")
+    print(f"#  '{target_dir}'")
+    print("# accessible to ALL devices on your local network.")
+    print("#")
+    print("# - Ensure you trust your network environment.")
+    print("# - Do NOT serve directories containing sensitive data.")
+    print("# - Stop the server (Ctrl+C) when finished.")
+    print("############################################\n")
+
+    try:
+        # Start the server
+        run_server(directory=target_dir, port=args.port)
+        print("\nServer stopped.")
+        return 0
+    except KeyboardInterrupt:
+        print("\nServer stopped by user.")
+        return 0
+    except Exception as e:
+        print(f"\nError: {e}")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,216 @@
+Here's the Python script `share_website.py` that meets your requirements:
+
+`<xaiArtifact artifact_id="7764be21-aa3f-498b-a96f-9d7ac2b30d68" title="share_website.py" contentType="text/python">`
+import http.server
+import socket
+import argparse
+import os
+import sys
+import errno # Import errno for cross-platform error codes
+
+def get_local_ip() -> str:
+    """Detect the local IP address of the machine."""
+    s = None # Initialize s to None
+    try:
+        # Create a temporary socket to get the IP address that would be used to connect to an external host
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Doesn't actually send data, just establishes a potential connection route
+        s.connect(("8.8.8.8", 80)) # Google's public DNS server
+        local_ip = s.getsockname()[0]
+    except OSError: # Handle cases where the network might be down or host unreachable
+        try:
+            # Fallback: Get IP associated with the hostname
+            local_ip = socket.gethostbyname(socket.gethostname())
+        except socket.gaierror:
+            # Fallback: If hostname resolution fails, use loopback
+            local_ip = "127.0.0.1"
+    finally:
+        if s:
+            s.close()
+    return local_ip
+
+def run_server(directory: str = ".", port: int = 8000) -> None:
+    """Starts a simple HTTP server, handling port conflicts and permissions."""
+    try:
+        # Ensure the directory exists before trying to change into it
+        if not os.path.isdir(directory):
+            print(f"Error: Directory not found: {directory}")
+            sys.exit(1)
+        os.chdir(directory)
+    except OSError as e:
+        print(f"Error changing to directory {directory}: {e}")
+        sys.exit(1)
+
+    handler = http.server.SimpleHTTPRequestHandler
+    address = ("0.0.0.0", port)
+    max_retries = 3
+    retries = 0
+
+    while retries < max_retries:
+        try:
+            # Use HTTPServer for proper HTTP handling
+            with http.server.HTTPServer(address, handler) as httpd:
+                local_ip = get_local_ip()
+                abs_dir = os.path.abspath(directory)
+                print(f"\nServing website from directory: {abs_dir}")
+                print(f"Access locally: http://localhost:{port}")
+                print(f"Access on network: http://{local_ip}:{port}")
+                print("\nNote: Ensure your firewall allows incoming connections on this port.")
+                print("Press Ctrl+C to stop the server.")
+                httpd.serve_forever() # Blocks here until interrupted
+        except OSError as e:
+            # Handle common errors across platforms
+            if e.errno in (errno.EADDRINUSE, 98, 48, 10048): # Linux/macOS/Windows 'Address already in use'
+                retries += 1
+                print(f"\nError: Port {port} is already in use.")
+                if retries < max_retries:
+                    try:
+                        new_port_str = input(f"Enter a different port (attempt {retries}/{max_retries-1}) or press Enter to exit: ")
+                        if not new_port_str:
+                            print("Exiting.")
+                            sys.exit(1)
+                        new_port = int(new_port_str)
+                        if 1 <= new_port <= 65535:
+                            port = new_port
+                            address = ("0.0.0.0", port) # Update address tuple
+                        else:
+                            print("Invalid port number. Must be between 1 and 65535.")
+                            # Decrement retries because this wasn't a valid attempt at a new port
+                            retries -=1
+                    except ValueError:
+                        print("Invalid input. Please enter a number.")
+                        # Decrement retries because this wasn't a valid attempt at a new port
+                        retries -=1
+                else:
+                    print("Maximum retry attempts reached. Exiting.")
+                    sys.exit(1)
+            elif e.errno in (errno.EACCES, 13): # Permission denied (e.g., using < 1024 without root)
+                print(f"\nError: Permission denied to use port {port}.")
+                print("Try a port number above 1024 or run with administrator/root privileges.")
+                sys.exit(1)
+            else:
+                # Catch other potential OS errors
+                print(f"\nAn unexpected OS error occurred: {e}")
+                sys.exit(1)
+        except KeyboardInterrupt:
+            # Handle Ctrl+C gracefully
+            print("\nStopping the server...")
+            break # Exit the while loop
+        except Exception as e:
+            # Catch any other unexpected errors during server setup/run
+            print(f"\nAn unexpected error occurred: {e}")
+            sys.exit(1)
+
+    if retries >= max_retries:
+         print("Failed to start server after multiple attempts.")
+
+if __name__ == "__main__":
+    # Setup command-line argument parsing with examples
+    parser = argparse.ArgumentParser(
+        description="Easily share a local website directory on your network.",
+        epilog="Examples:\n"
+               "  python share_website.py                   # Serve current directory on port 8000\n"
+               "  python share_website.py --port 8080       # Serve current directory on port 8080\n"
+               "  python share_website.py --dir ./public    # Serve './public' directory on port 8000\n"
+               "  python share_website.py --dir /var/www --port 80 # Serve '/var/www' on port 80 (might need sudo/admin)",
+        formatter_class=argparse.RawDescriptionHelpFormatter # Keep epilog formatting
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port number to serve the website on (default: 8000)."
+    )
+    parser.add_argument(
+        "--dir",
+        type=str,
+        default=".",
+        help="Directory containing the website files to serve (default: current directory)."
+    )
+    args = parser.parse_args()
+
+    # Validate port range provided via argument
+    if not (1 <= args.port <= 65535):
+        print(f"Error: Invalid port number {args.port}. Must be between 1 and 65535.")
+        sys.exit(1)
+
+    # Enhanced Warning Message
+    print("\n############################################")
+    print("#          WARNING: NETWORK EXPOSURE         #")
+    print("############################################")
+    print("# This script makes the specified directory:")
+    print(f"#  '{os.path.abspath(args.dir)}'")
+    print("# accessible to ALL devices on your local network.")
+    print("#")
+    print("# - Ensure you trust your network environment.")
+    print("# - Do NOT serve directories containing sensitive data.")
+    print("# - Stop the server (Ctrl+C) when finished.")
+    print("############################################\n")
+
+    # Start the server
+    run_server(directory=args.dir, port=args.port)
+
+    print("\nServer stopped.")
+`</xaiArtifact>`
+
+**Prompt for generating this script:**
+
+"Create a Python script named `share_website.py` that automates the process of sharing a local website on the same network, as described in the provided guide summary and requirements. The script should:
+
+- Automatically detect the local IP address.
+- Start an `http.server` on `0.0.0.0` on a user-specified port (default 8000).
+- Serve files from a user-specified directory (default current directory).
+- Print clear instructions on how to access the website from other devices.
+- Handle port conflicts and permission errors, providing helpful messages and options.
+- Include a command-line interface using `argparse` for setting the port and directory.
+- Include a warning about network exposure.
+- Be cross-platform compatible using standard Python libraries.
+- The final script should be wrapped in an `<xaiArtifact>` tag with `artifact_id="7764be21-aa3f-498b-a96f-9d7ac2b30d68"`, `title="share_website.py"`, and `contentType="text/python"`. Do not include the script in a markdown code block within the `<xaiArtifact>` tag."
+
+**Guide Summary**:
+The goal is to make a local website, potentially including embedded maps from mamap.io, accessible to other computers on the same network. This involves:
+1. Finding the local IP address of the computer.
+2. Starting a web server (e.g., Python’s http.server) that listens on all interfaces (0.0.0.0) to serve the website.
+3. Providing instructions for accessing the website from another device using the IP address and port.
+4. Handling basic troubleshooting, such as checking for port conflicts or firewall issues.
+
+**Requirements for the Python Script**:
+- **Functionality**:
+  - Automatically detect the local IP address of the computer (cross-platform: Windows, Mac, Linux).
+  - Start a web server using Python’s `http.server` module to serve files from the current directory (or a specified directory).
+  - Use a default port (e.g., 8000) but allow the user to specify a custom port via a command-line argument.
+  - Bind the server to `0.0.0.0` to allow access from other devices on the network.
+  - Print clear instructions, including the URL (e.g., `http://<local_ip>:8000`) that others can use to access the website.
+  - Include basic error handling for common issues, such as port conflicts (suggesting an alternative port) or permission errors.
+  - Optionally, provide a note about checking firewall settings if the site isn’t accessible.
+- **User Experience**:
+  - The script should be easy to run with minimal setup (e.g., `python share_website.py` or `python share_website.py --port 8080`).
+  - Allow the user to specify the directory to serve via a command-line argument (default to the current directory).
+  - Display a message indicating the server is running and how to stop it (e.g., Ctrl+C).
+- **Cross-Platform Compatibility**:
+  - Use Python’s standard library modules (e.g., `socket`, `http.server`, `argparse`) to ensure compatibility across Windows, Mac, and Linux without external dependencies.
+  - Handle differences in IP address detection (e.g., using `socket.gethostbyname` or similar).
+- **Security Notes**:
+  - Include a comment in the script warning that the server exposes the website to all devices on the local network and should be stopped when testing is complete.
+  - Avoid serving sensitive data, as noted in the guide.
+- **Output**:
+  - Generate a single Python script file named `share_website.py`.
+  - Include comments explaining the script’s purpose and usage.
+  - Wrap the entire script in an `<xaiArtifact>` tag with the following attributes:
+    - `artifact_id="7764be21-aa3f-498b-a96f-9d7ac2b30d68"` (reusing the ID from the previous guide artifact, as this is an extension of the same task).
+    - `title="share_website.py"`.
+    - `contentType="text/python"`.
+  - Do not include the script in a markdown code block within the `<xaiArtifact>` tag, as it’s pure source code.
+- **Additional Notes**:
+  - The script should assume the website includes embedded content like mamap.io maps, which will load as long as the accessing device has internet access.
+  - If the port is in use, suggest an alternative port and allow the user to retry.
+  - Include a usage example in the comments, e.g., `python share_website.py --port 8080 --dir /path/to/website`.
+
+**Example Behavior**:
+When run, the script should:
+1. Detect the local IP (e.g., `192.168.1.100`).
+2. Start a server on `0.0.0.0:8000` (or a specified port).
+3. Print: `Serving website at http://192.168.1.100:8000. Access this URL from another device on the same network. Press Ctrl+C to stop.`
+4. Note: `Ensure your firewall allows incoming connections on port 8000.`
+
+Please generate the Python script according to these specifications, ensuring it’s practical, user-friendly, and aligned with the guide’s instructions for sharing a local website on the same network.
