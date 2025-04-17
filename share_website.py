@@ -170,9 +170,19 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             with urllib.request.urlopen(req) as response:
                 # Copy the response status and headers
                 self.send_response(response.status)
+
+                # Set content type based on file extension for PHP files
+                content_type = None
                 for header, value in response.getheaders():
+                    if header.lower() == 'content-type':
+                        content_type = value
                     if header.lower() not in ('transfer-encoding', 'connection'):
                         self.send_header(header, value)
+
+                # If PHP file is requested but content-type is not set correctly, fix it
+                if self.path.endswith('.php') and (not content_type or 'octet-stream' in content_type):
+                    self.send_header('Content-type', 'text/html')
+
                 self.end_headers()
 
                 # Copy the response body
