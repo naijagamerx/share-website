@@ -211,7 +211,20 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             return
 
         # Forward the request to the PHP server (using localhost is most reliable for local proxying)
-        target_url = f"http://localhost:{self.php_server_port}{self.path}"
+        # For paths that include the base directory name, we need to strip it when forwarding to PHP server
+        base_dir_name = os.path.basename(os.path.normpath(self.directory))
+        php_path = self.path
+
+        # If the path starts with the base directory name, strip it to access the correct files
+        if self.path.startswith(f'/{base_dir_name}/') or self.path == f'/{base_dir_name}':
+            # Remove the base directory name from the path
+            php_path = self.path[len(f'/{base_dir_name}'):]
+            # If the resulting path is empty, use root
+            if not php_path:
+                php_path = '/'
+            print(f"Remapped path from {self.path} to {php_path} for PHP server")
+
+        target_url = f"http://localhost:{self.php_server_port}{php_path}"
 
         # Special handling for PHP files - add query string to force PHP processing
         if self.path.endswith('.php') and '?' not in self.path:
@@ -347,6 +360,18 @@ class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"<html><body><h1>403 Forbidden</h1><p>Access is restricted to the shared directory.</p></body></html>")
                 return
+
+            # For paths that include the base directory name, we need to modify the path
+            # to correctly serve files from the actual directory
+            if self.path.startswith(f'/{base_dir_name}/') or self.path == f'/{base_dir_name}':
+                # Store the original path for later use
+                original_path = self.path
+                # Remove the base directory name from the path
+                self.path = self.path[len(f'/{base_dir_name}'):]
+                # If the resulting path is empty, use root
+                if not self.path:
+                    self.path = '/'
+                print(f"Remapped path from {original_path} to {self.path} for static file serving")
 
         # Serve welcome page for specific paths
         # Note: Root path '/' is already handled above with redirection
