@@ -117,6 +117,9 @@ python share_website.py
 
 # Enable PHP processing (requires MAMP/XAMPP running)
 python share_website.py --php
+
+# Force static file serving mode (even if PHP server detected)
+python share_website.py --static
 ```
 
 ## Advanced Usage
@@ -169,18 +172,26 @@ If you have either of these installed, SiteShare will show you a list of availab
 
 ### PHP Support
 
-SiteShare can now process PHP files by proxying requests to your local MAMP/XAMPP server:
+SiteShare can process PHP files by proxying requests to your local MAMP/XAMPP/WAMP server.
 
-1. Make sure MAMP or XAMPP is running
-2. Run SiteShare with the `--php` flag: `python share_website.py --php`
-3. SiteShare will automatically detect your PHP server and proxy requests to it
+**How it works:**
+
+1.  **Detection:** When started, SiteShare checks common ports (80, 8888, 8080, 8000) for a running PHP-capable server (like Apache or Nginx often used by MAMP/XAMPP).
+2.  **Mode Selection:**
+    *   **`--php` flag:** If you run `python share_website.py --php` and a PHP server is found, PHP proxy mode is automatically enabled.
+    *   **`--static` flag:** If you run `python share_website.py --static`, static file serving mode is forced, regardless of whether a PHP server is found.
+    *   **No flags:** If a PHP server is detected and you didn't use `--php` or `--static`, SiteShare will ask you interactively: `Enable PHP proxy mode for this site? (y/n):`. Choose `y` to enable PHP proxying or `n` to use static file serving for this session.
+    *   **No PHP Server:** If no PHP server is detected on the common ports, SiteShare will default to static file serving mode.
+3.  **Proxying:** In PHP mode, requests for `.php` files (and potentially other requests depending on the setup) are forwarded to your local PHP server for processing. The results are then sent back to the requesting device.
+
+**Benefits:**
 
 This allows you to view and interact with PHP-based websites on other devices, including:
 - WordPress sites
 - PHP applications
 - Dynamic websites with database connections
 
-> **Note:** PHP mode requires that you have MAMP, XAMPP, or another PHP server running locally.
+> **Note:** PHP proxy mode requires that you have MAMP, XAMPP, WAMP, or a similar PHP development server running locally on one of the detected ports. Static mode does not require a separate PHP server.
 
 ## Troubleshooting
 

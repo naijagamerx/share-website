@@ -249,8 +249,10 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
 
                 # Copy headers from PHP server
                 for header, value in response.getheaders():
-                    if header.lower() not in ('transfer-encoding', 'connection', 'content-encoding'):
+                    # Allow Content-Encoding through, but skip others that interfere
+                    if header.lower() not in ('transfer-encoding', 'connection'):
                         if header.lower() == 'content-type':
+                            # Still force text/html for direct .php requests for consistency
                             self.send_header(header, 'text/html; charset=UTF-8')
                             content_type_sent = True
                         else:
@@ -391,8 +393,8 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
                 # Copy the response status and headers from PHP server
                 self.send_response(response.status)
                 for header, value in response.getheaders():
-                    # Avoid copying headers that interfere with proxying
-                    if header.lower() not in ('transfer-encoding', 'connection', 'content-encoding'):
+                    # Avoid copying headers that interfere with proxying, BUT ALLOW Content-Encoding
+                    if header.lower() not in ('transfer-encoding', 'connection'):
                         self.send_header(header, value)
                 self.end_headers()
 
@@ -439,7 +441,8 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             # Otherwise, pass the original error from the PHP server to the client
             self.send_response(e.code, e.reason)
             for header, value in e.headers.items():
-                 if header.lower() not in ('transfer-encoding', 'connection', 'content-encoding'):
+                 # Allow Content-Encoding through even on errors
+                 if header.lower() not in ('transfer-encoding', 'connection'):
                     self.send_header(header, value)
             self.end_headers()
             if e.fp: # If the error response has a body, copy it
@@ -563,7 +566,7 @@ class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
 
         sys.stderr.write(f"{log_color}[{self.log_date_time_string()}] {message}{C_RESET}\n")
 
-def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -> None:
+def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False, **kwargs) -> None: # Add **kwargs
     """
     Starts a simple HTTP server, handling port conflicts and permissions.
 
@@ -574,7 +577,8 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
     Args:
         directory (str): The directory to serve (default: current directory)
         port (int): The port to serve on (default: 8000)
-        php_mode (bool): Whether to enable PHP processing (default: False)
+        php_mode (bool): Whether PHP mode was requested via --php flag
+        **kwargs: Catches extra arguments like force_static
 
     Returns:
         None
@@ -592,21 +596,39 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
     # --- Determine Server Mode (Static vs PHP Proxy) ---
     php_server_port = None
     final_php_mode = False # Track if PHP mode is actually used
+    force_static = kwargs.get('force_static', False) # Get the new arg from main
 
-    if php_mode:
-        print(f"{C_CYAN}PHP mode requested. Checking for local PHP server...{C_RESET}")
-        php_server_port = find_php_server()
-        if php_server_port:
-            print(f"{C_GREEN}✓ Found PHP-capable server on port {C_BOLD}{php_server_port}{C_RESET}")
+    # Always check for a PHP server first
+    print(f"{C_CYAN}Checking for local PHP server...{C_RESET}")
+    php_server_port = find_php_server()
+
+    if php_server_port:
+        print(f"{C_GREEN}✓ Found PHP-capable server on port {C_BOLD}{php_server_port}{C_RESET}")
+        if force_static:
+            print(f"{C_BLUE}--static flag used. Forcing static file serving mode.{C_RESET}")
+            final_php_mode = False
+        elif php_mode: # --php flag was used
+            print(f"{C_BLUE}--php flag used. Enabling PHP proxy mode.{C_RESET}")
             final_php_mode = True
         else:
-            print(f"{C_YELLOW}! No running PHP server detected on common ports ({', '.join(map(str, PHP_SERVER_PORTS))}).{C_RESET}")
-            print(f"{C_YELLOW}  Make sure MAMP, XAMPP, or similar is running if you need PHP processing.{C_RESET}")
-            print(f"{C_BLUE}  Falling back to static file serving mode.{C_RESET}")
-            php_mode = False # Force static mode if server not found
+            # Neither --php nor --static used, ask the user
+            while True:
+                enable_php = input(f"{C_YELLOW}Enable PHP proxy mode for this site? (y/n): {C_RESET}").lower().strip()
+                if enable_php == 'y':
+                    final_php_mode = True
+                    break
+                elif enable_php == 'n':
+                    final_php_mode = False
+                    break
+                else:
+                    print(f"{C_RED}Invalid input. Please enter 'y' or 'n'.{C_RESET}")
     else:
-         print(f"{C_BLUE}PHP mode not requested. Using static file serving mode.{C_RESET}")
-
+        # No PHP server found
+        print(f"{C_YELLOW}! No running PHP server detected on common ports ({', '.join(map(str, PHP_SERVER_PORTS))}).{C_RESET}")
+        if php_mode: # --php flag was used but no server found
+            print(f"{C_YELLOW}  --php flag was specified, but no server found. Cannot enable PHP mode.{C_RESET}")
+        print(f"{C_BLUE}Using static file serving mode.{C_RESET}")
+        final_php_mode = False
 
     # --- Create the appropriate handler ---
     if final_php_mode and php_server_port:
@@ -619,11 +641,14 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
         handler = PHPProxyHandler
     else:
         # If PHP mode was requested but failed, this message is already shown
-        if not php_mode: # Only print if PHP wasn't requested initially
+        if not php_mode and not force_static and php_server_port: # Only print if static was chosen interactively or no server found
              print(f"{C_GREEN}Using static file mode.{C_RESET}")
+        elif not php_server_port and not php_mode: # Print if no server found and --php wasn't used
+             print(f"{C_GREEN}Using static file mode.{C_RESET}")
+
         # Use our custom static file handler, passing the directory
         # We need to pass directory="." since we're changing to the target directory
-        handler = lambda *args, **kwargs: SiteShareHandler(*args, directory=".", **kwargs)
+        handler = lambda *args, **kwargs_handler: SiteShareHandler(*args, directory=".", **kwargs_handler)
 
     # --- Start HTTP Server ---
     original_cwd = os.getcwd() # Store original directory
@@ -757,6 +782,7 @@ def main():
                "  python share_website.py --port 8080       # Serve current directory on port 8080\n"
                "  python share_website.py --dir ./public    # Serve './public' directory on port 8000\n"
                "  python share_website.py --php             # Enable PHP processing (requires MAMP/XAMPP)\n"
+               "  python share_website.py --static          # Force static mode\n"
                "  python share_website.py --dir /var/www --port 80 # Serve '/var/www' on port 80 (might need sudo/admin)",
         formatter_class=argparse.RawDescriptionHelpFormatter # Keep epilog formatting
     )
@@ -776,6 +802,11 @@ def main():
         "--php",
         action="store_true",
         help="Enable PHP processing by proxying to a local PHP server (MAMP/XAMPP)"
+    )
+    parser.add_argument(
+        "--static",
+        action="store_true",
+        help="Force static file serving mode, even if a PHP server is detected."
     )
     parser.add_argument(
         "--version",
@@ -869,7 +900,8 @@ def main():
     # --- Start Server ---
     print(f"{C_MAGENTA}Starting Server...{C_RESET}")
     try:
-        run_server(directory=target_dir, port=args.port, php_mode=args.php)
+        # Pass both php and static flags to run_server
+        run_server(directory=target_dir, port=args.port, php_mode=args.php, force_static=args.static)
         print(f"\n{C_BLUE}Server stopped gracefully.{C_RESET}")
         return 0
     except KeyboardInterrupt:
