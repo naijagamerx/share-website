@@ -21,6 +21,13 @@ import os
 import sys
 import errno  # Import errno for cross-platform error codes
 import platform
+import urllib.request
+import urllib.error
+import urllib.parse
+import shutil
+import re
+import subprocess
+from http import HTTPStatus
 
 # Configuration
 VERSION = "1.0.0"  # SiteShare version
@@ -42,6 +49,36 @@ WEB_SERVER_PATHS = {
         "/var/www/html/"       # Default Apache on Linux
     ]
 }
+
+# Common PHP server ports to check
+PHP_SERVER_PORTS = [80, 8888, 8080, 8000]
+
+# Function to check if a local PHP server is running
+def find_php_server():
+    """
+    Detect if a PHP server (like MAMP or XAMPP) is running locally.
+    Returns the port number if found, otherwise None.
+    """
+    for port in PHP_SERVER_PORTS:
+        try:
+            # Try to connect to localhost on the port
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)  # Short timeout
+                result = s.connect_ex(('127.0.0.1', port))
+                if result == 0:  # Port is open
+                    # Try to fetch the server header to confirm it's a web server
+                    try:
+                        response = urllib.request.urlopen(f"http://localhost:{port}", timeout=1)
+                        server = response.info().get('Server', '')
+                        if 'apache' in server.lower() or 'php' in server.lower() or 'nginx' in server.lower():
+                            print(f"Found PHP-capable server on port {port} ({server})")
+                            return port
+                    except:
+                        pass  # Not a web server or couldn't connect
+        except:
+            pass  # Couldn't check this port
+
+    return None
 
 def get_local_ip() -> str:
     """
@@ -75,6 +112,96 @@ def get_local_ip() -> str:
             s.close()
     return local_ip
 
+class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
+    """
+    Handler that proxies requests to a local PHP server.
+    """
+    php_server_port = None
+    directory = None
+    script_dir = None
+
+    def do_GET(self):
+        return self.proxy_request('GET')
+
+    def do_POST(self):
+        return self.proxy_request('POST')
+
+    def do_HEAD(self):
+        return self.proxy_request('HEAD')
+
+    def proxy_request(self, method):
+        # Special endpoint to get server information
+        if self.path == '/siteshare-info.json':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            info = {
+                'directory': os.path.abspath(self.directory),
+                'version': VERSION,
+                'mode': 'PHP Proxy',
+                'php_port': self.php_server_port
+            }
+            self.wfile.write(bytes(str(info).replace("'", '"'), 'utf-8'))
+            return
+
+        # Serve welcome page for root requests if welcome.html exists in script directory
+        if self.path == '/' or self.path == '/index.html':
+            welcome_path = os.path.join(self.script_dir, 'welcome.html')
+            if os.path.exists(welcome_path):
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                with open(welcome_path, 'rb') as file:
+                    self.wfile.write(file.read())
+                return
+
+        # Forward the request to the PHP server
+        target_url = f"http://localhost:{self.php_server_port}{self.path}"
+
+        try:
+            # Create a request to the PHP server
+            headers = {key: value for key, value in self.headers.items()}
+
+            # Read the request body for POST requests
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length) if content_length > 0 else None
+
+            # Create the request
+            req = urllib.request.Request(
+                target_url,
+                data=body,
+                headers=headers,
+                method=method
+            )
+
+            # Send the request to the PHP server
+            with urllib.request.urlopen(req) as response:
+                # Copy the response status and headers
+                self.send_response(response.status)
+                for header, value in response.getheaders():
+                    if header.lower() not in ('transfer-encoding', 'connection'):
+                        self.send_header(header, value)
+                self.end_headers()
+
+                # Copy the response body
+                shutil.copyfileobj(response, self.wfile)
+
+        except urllib.error.HTTPError as e:
+            self.send_response(e.code)
+            for header, value in e.headers.items():
+                if header.lower() not in ('transfer-encoding', 'connection'):
+                    self.send_header(header, value)
+            self.end_headers()
+            if e.fp:
+                shutil.copyfileobj(e.fp, self.wfile)
+
+        except Exception as e:
+            self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            error_message = f"<html><body><h1>Error</h1><p>Failed to proxy request: {str(e)}</p></body></html>"
+            self.wfile.write(error_message.encode('utf-8'))
+
 class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
     """
     Custom request handler for SiteShare.
@@ -95,7 +222,8 @@ class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             info = {
                 'directory': os.path.abspath(self.directory),
-                'version': VERSION
+                'version': VERSION,
+                'mode': 'Static Files'
             }
             self.wfile.write(bytes(str(info).replace("'", '"'), 'utf-8'))
             return
@@ -114,7 +242,7 @@ class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
         # For all other requests, use the standard behavior
         return super().do_GET()
 
-def run_server(directory: str = ".", port: int = 8000) -> None:
+def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -> None:
     """
     Starts a simple HTTP server, handling port conflicts and permissions.
 
@@ -125,6 +253,7 @@ def run_server(directory: str = ".", port: int = 8000) -> None:
     Args:
         directory (str): The directory to serve (default: current directory)
         port (int): The port to serve on (default: 8000)
+        php_mode (bool): Whether to enable PHP processing (default: False)
 
     Returns:
         None
@@ -139,8 +268,30 @@ def run_server(directory: str = ".", port: int = 8000) -> None:
         print(f"Error changing to directory {directory}: {e}")
         sys.exit(1)
 
-    # Use our custom handler
-    handler = lambda *args, **kwargs: SiteShareHandler(*args, directory=directory, **kwargs)
+    # Determine if we should use PHP mode
+    php_server_port = None
+    if php_mode:
+        print("PHP mode enabled. Checking for a local PHP server...")
+        php_server_port = find_php_server()
+        if not php_server_port:
+            print("Warning: No PHP server found. PHP files will not be processed.")
+            print("Make sure MAMP, XAMPP, or another PHP server is running.")
+            print("Falling back to static file mode.")
+            php_mode = False
+
+    # Create the appropriate handler
+    if php_mode and php_server_port:
+        print(f"Using PHP proxy mode with local server on port {php_server_port}")
+        # Create a handler class with the PHP server port
+        PHPProxyHandler.php_server_port = php_server_port
+        PHPProxyHandler.directory = directory
+        PHPProxyHandler.script_dir = os.path.dirname(os.path.abspath(__file__))
+        handler = PHPProxyHandler
+    else:
+        print("Using static file mode (PHP files will not be processed)")
+        # Use our custom static file handler
+        handler = lambda *args, **kwargs: SiteShareHandler(*args, directory=directory, **kwargs)
+
     # Bind to all interfaces (both IPv4 and IPv6 if available)
     address = ("", port)
     max_retries = 3
@@ -241,6 +392,7 @@ def main():
                "  python share_website.py                   # Serve current directory on port 8000\n"
                "  python share_website.py --port 8080       # Serve current directory on port 8080\n"
                "  python share_website.py --dir ./public    # Serve './public' directory on port 8000\n"
+               "  python share_website.py --php             # Enable PHP processing (requires MAMP/XAMPP)\n"
                "  python share_website.py --dir /var/www --port 80 # Serve '/var/www' on port 80 (might need sudo/admin)",
         formatter_class=argparse.RawDescriptionHelpFormatter # Keep epilog formatting
     )
@@ -255,6 +407,11 @@ def main():
         type=str,
         default=None,
         help="[Optional] Specific directory to serve (overrides site selection)"
+    )
+    parser.add_argument(
+        "--php",
+        action="store_true",
+        help="Enable PHP processing by proxying to a local PHP server (MAMP/XAMPP)"
     )
     parser.add_argument(
         "--version",
@@ -340,7 +497,7 @@ def main():
 
     try:
         # Start the server
-        run_server(directory=target_dir, port=args.port)
+        run_server(directory=target_dir, port=args.port, php_mode=args.php)
         print("\nServer stopped.")
         return 0
     except KeyboardInterrupt:

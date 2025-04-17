@@ -16,6 +16,7 @@ SiteShare is a user-friendly Python utility that makes it easy to share local we
 - Simple interface with minimal setup required
 - Automatic local IP detection
 - Interactive site selection from MAMP/XAMPP directory
+- **PHP Support** - Can proxy requests to your local MAMP/XAMPP server
 - Detailed security warnings
 - Port conflict resolution
 - Cross-platform compatibility (Windows, Mac, Linux)
@@ -111,6 +112,9 @@ python share_website.py --dir "C:\My Website" --port 8080
 
 # Share a MAMP/XAMPP website (interactive selection)
 python share_website.py
+
+# Enable PHP processing (requires MAMP/XAMPP running)
+python share_website.py --php
 ```
 
 ## Advanced Usage
@@ -160,6 +164,21 @@ SiteShare automatically detects websites in your MAMP or XAMPP htdocs folder:
 - For XAMPP, it looks in `c:/xampp/htdocs/` (Windows) or `/opt/lampp/htdocs/` (Linux)
 
 If you have either of these installed, SiteShare will show you a list of available websites when you run it without specifying a directory.
+
+### PHP Support
+
+SiteShare can now process PHP files by proxying requests to your local MAMP/XAMPP server:
+
+1. Make sure MAMP or XAMPP is running
+2. Run SiteShare with the `--php` flag: `python share_website.py --php`
+3. SiteShare will automatically detect your PHP server and proxy requests to it
+
+This allows you to view and interact with PHP-based websites on other devices, including:
+- WordPress sites
+- PHP applications
+- Dynamic websites with database connections
+
+> **Note:** PHP mode requires that you have MAMP, XAMPP, or another PHP server running locally.
 
 ## Troubleshooting
 

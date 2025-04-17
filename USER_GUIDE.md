@@ -16,9 +16,12 @@ SiteShare is a simple tool that lets you view your website on other devices like
 
 1. Double-click the `start_siteshare.bat` file
 2. A black command window will open
-3. If you have MAMP, XAMPP, or WAMP installed, you'll see a list of your websites
-4. Type the number of the website you want to share and press Enter
-5. You'll see two web addresses (URLs):
+3. Choose an option:
+   - Option 1: Normal mode (for HTML, CSS, JavaScript files)
+   - Option 2: PHP mode (for PHP websites, requires MAMP/XAMPP running)
+4. If you have MAMP, XAMPP, or WAMP installed, you'll see a list of your websites
+5. Type the number of the website you want to share and press Enter
+6. You'll see two web addresses (URLs):
    - One starting with "localhost" (for your computer)
    - One starting with numbers like "192.168.x.x" (for other devices)
 
@@ -40,7 +43,28 @@ SiteShare is a simple tool that lets you view your website on other devices like
    - Type the address that starts with numbers (like http://192.168.x.x:8000)
    - Your website should appear!
 
+## PHP Websites
+
+If you want to share PHP websites (like WordPress, Joomla, or custom PHP sites), you need to:
+
+1. Make sure MAMP or XAMPP is running on your computer
+2. Start SiteShare with PHP mode:
+   - On Windows: Choose option 2 when starting
+   - On Mac/Linux: Choose option 2 when starting
+   - Or run: `python share_website.py --php`
+
+When PHP mode is enabled, SiteShare will:
+- Detect your running MAMP/XAMPP server
+- Forward all requests to it
+- Allow PHP code to run properly
+
 ## Troubleshooting
+
+### PHP files show as code instead of running?
+
+1. Make sure you started SiteShare with PHP mode (option 2)
+2. Check that MAMP or XAMPP is running
+3. Restart SiteShare with PHP mode enabled
 
 ### Can't see the website on other devices?
 
