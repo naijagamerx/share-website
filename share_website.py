@@ -359,27 +359,56 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
         print(f"Error accessing directory {directory}: {e}")
         sys.exit(1)
 
+    # Define colors for Windows and Unix-like systems
+    if platform.system().lower() == "windows":
+        # Windows doesn't support ANSI colors in standard console
+        GREEN = ""
+        YELLOW = ""
+        CYAN = ""
+        RED = ""
+        MAGENTA = ""
+        RESET = ""
+        BOLD = ""
+    else:
+        # ANSI color codes for Unix-like systems
+        GREEN = "\033[92m"
+        YELLOW = "\033[93m"
+        CYAN = "\033[96m"
+        RED = "\033[91m"
+        MAGENTA = "\033[95m"
+        RESET = "\033[0m"
+        BOLD = "\033[1m"
+
     # Determine if we should use PHP mode
     php_server_port = None
     if php_mode:
-        print("PHP mode enabled. Checking for a local PHP server...")
+        print(f"\n{CYAN}{'=' * 50}{RESET}")
+        print(f"{BOLD}{MAGENTA}PHP MODE{RESET}")
+        print(f"{CYAN}{'=' * 50}{RESET}")
+        print(f"{YELLOW}PHP mode enabled. Checking for a local PHP server...{RESET}")
         php_server_port = find_php_server()
         if not php_server_port:
-            print("Warning: No PHP server found. PHP files will not be processed.")
-            print("Make sure MAMP, XAMPP, or another PHP server is running.")
-            print("Falling back to static file mode.")
+            print(f"{RED}Warning: No PHP server found. PHP files will not be processed.{RESET}")
+            print(f"{YELLOW}Make sure MAMP, XAMPP, or another PHP server is running.{RESET}")
+            print(f"{YELLOW}Falling back to static file mode.{RESET}")
             php_mode = False
 
     # Create the appropriate handler
     if php_mode and php_server_port:
-        print(f"Using PHP proxy mode with local server on port {php_server_port}")
+        print(f"\n{CYAN}{'=' * 50}{RESET}")
+        print(f"{BOLD}{GREEN}SERVER MODE{RESET}")
+        print(f"{CYAN}{'=' * 50}{RESET}")
+        print(f"{GREEN}Using PHP proxy mode with local server on port {php_server_port}{RESET}")
         # Create a handler class with the PHP server port
         PHPProxyHandler.php_server_port = php_server_port
         PHPProxyHandler.directory = directory
         PHPProxyHandler.script_dir = os.path.dirname(os.path.abspath(__file__))
         handler = PHPProxyHandler
     else:
-        print("Using static file mode (PHP files will not be processed)")
+        print(f"\n{CYAN}{'=' * 50}{RESET}")
+        print(f"{BOLD}{GREEN}SERVER MODE{RESET}")
+        print(f"{CYAN}{'=' * 50}{RESET}")
+        print(f"{YELLOW}Using static file mode (PHP files will not be processed){RESET}")
         # Use our custom static file handler
         handler = lambda *args, **kwargs: SiteShareHandler(*args, directory=directory, **kwargs)
 
@@ -394,14 +423,42 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
             with http.server.ThreadingHTTPServer(address, handler) as httpd:
                 local_ip = get_local_ip()
                 abs_dir = os.path.abspath(directory)
-                print(f"\nServing website from directory: {abs_dir}")
-                print(f"  - Access locally (on this machine): http://localhost:{port}")
-                print(f"  - Access on network (other devices): http://{local_ip}:{port}")
-                print("\nImportant:")
-                print("  - 'localhost' only works on the computer running this script.")
-                print("  - Other devices MUST use the network IP address.")
-                print("  - Ensure your firewall allows incoming connections on port {port}.")
-                print("\nPress Ctrl+C to stop the server.")
+                # Define colors for Windows and Unix-like systems
+                if platform.system().lower() == "windows":
+                    # Windows doesn't support ANSI colors in standard console
+                    GREEN = ""
+                    YELLOW = ""
+                    CYAN = ""
+                    MAGENTA = ""
+                    RESET = ""
+                    BOLD = ""
+                else:
+                    # ANSI color codes for Unix-like systems
+                    GREEN = "\033[92m"
+                    YELLOW = "\033[93m"
+                    CYAN = "\033[96m"
+                    MAGENTA = "\033[95m"
+                    RESET = "\033[0m"
+                    BOLD = "\033[1m"
+
+                # Server information section
+                print(f"\n{CYAN}{'=' * 50}{RESET}")
+                print(f"{BOLD}{GREEN}SERVER INFORMATION{RESET}")
+                print(f"{CYAN}{'=' * 50}{RESET}")
+                print(f"\n{BOLD}Serving website from directory:{RESET} {abs_dir}")
+                print(f"  - {YELLOW}Access locally (on this machine):{RESET} http://localhost:{port}")
+                print(f"  - {YELLOW}Access on network (other devices):{RESET} http://{local_ip}:{port}")
+
+                # Important notes section
+                print(f"\n{CYAN}{'=' * 50}{RESET}")
+                print(f"{BOLD}{MAGENTA}IMPORTANT NOTES{RESET}")
+                print(f"{CYAN}{'=' * 50}{RESET}")
+                print(f"  - 'localhost' only works on the computer running this script.")
+                print(f"  - Other devices MUST use the network IP address.")
+                print(f"  - Ensure your firewall allows incoming connections on port {port}.")
+
+                print(f"\n{CYAN}{'=' * 50}{RESET}")
+                print(f"{BOLD}Press Ctrl+C to stop the server.{RESET}")
                 httpd.serve_forever() # Blocks here until interrupted
         except OSError as e:
             # Handle common errors across platforms
@@ -453,14 +510,49 @@ def print_banner():
     """
     Print a banner with the SiteShare name and version.
     """
-    print(f"""
-╔═══════════════════════════════════════════╗
-║                                           ║
-║   SiteShare v{VERSION}                        ║
-║   Local Website Sharing Tool              ║
-║                                           ║
-╚═══════════════════════════════════════════╝
-    """)
+    # Define colors for Windows and Unix-like systems
+    if platform.system().lower() == "windows":
+        # Windows doesn't support ANSI colors in standard console
+        # We'll use simple text for Windows
+        BLUE = ""
+        GREEN = ""
+        YELLOW = ""
+        CYAN = ""
+        RED = ""
+        MAGENTA = ""
+        RESET = ""
+        BOLD = ""
+    else:
+        # ANSI color codes for Unix-like systems
+        BLUE = "\033[94m"
+        GREEN = "\033[92m"
+        YELLOW = "\033[93m"
+        CYAN = "\033[96m"
+        RED = "\033[91m"
+        MAGENTA = "\033[95m"
+        RESET = "\033[0m"
+        BOLD = "\033[1m"
+
+    # ASCII art for "Site Share"
+    print(f"{CYAN}")
+    print("  ____  _ _        ____  _                   ")
+    print(" / ___|(_) |_ ___|/ ___|| |__   __ _ _ __ ___ ")
+    print(" \___ \| | __/ _ \\___ \| '_ \ / _` | '__/ _ \\")
+    print("  ___) | | ||  __/___) | | | | (_| | | |  __/")
+    print(" |____/|_|\__\___|____/|_| |_|\__,_|_|  \___|")
+    print(f"{RESET}")
+
+    # Attribution and version info
+    print(f"{YELLOW}╔═══════════════════════════════════════════╗{RESET}")
+    print(f"{YELLOW}║{RESET}                                           {YELLOW}║{RESET}")
+    print(f"{YELLOW}║{RESET}   {BOLD}SiteShare v{VERSION}{RESET}                        {YELLOW}║{RESET}")
+    print(f"{YELLOW}║{RESET}   {GREEN}Local Website Sharing Tool{RESET}              {YELLOW}║{RESET}")
+    print(f"{YELLOW}║{RESET}                                           {YELLOW}║{RESET}")
+    print(f"{YELLOW}╚═══════════════════════════════════════════╝{RESET}")
+    print(f"    {MAGENTA}Designed by{RESET}: {CYAN}demohomex.com{RESET}")
+    print(f"    {MAGENTA}Author{RESET}: {CYAN}naijagamerx{RESET}")
+    print(f"    {MAGENTA}GitHub{RESET}: {CYAN}https://github.com/naijagamerx/share-website{RESET}")
+    print("")
 
 def main():
     """
@@ -548,16 +640,41 @@ def main():
             except (FileNotFoundError, PermissionError):
                 pass
 
+        # Define colors for Windows and Unix-like systems
+        if platform.system().lower() == "windows":
+            # Windows doesn't support ANSI colors in standard console
+            GREEN = ""
+            YELLOW = ""
+            CYAN = ""
+            BLUE = ""
+            MAGENTA = ""
+            RED = ""
+            RESET = ""
+            BOLD = ""
+        else:
+            # ANSI color codes for Unix-like systems
+            GREEN = "\033[92m"
+            YELLOW = "\033[93m"
+            CYAN = "\033[96m"
+            BLUE = "\033[94m"
+            MAGENTA = "\033[95m"
+            RED = "\033[91m"
+            RESET = "\033[0m"
+            BOLD = "\033[1m"
+
         if not all_sites:
-            print("\nNo websites found in common web server directories.")
-            print("Please specify a directory with --dir option.")
+            print(f"\n{RED}No websites found in common web server directories.{RESET}")
+            print(f"{YELLOW}Please specify a directory with --dir option.{RESET}")
             return 1
 
-        print("\nAvailable websites:")
-        for i, (path, site) in enumerate(all_sites, 1):
-            print(f"{i}. {site} (in {path})")
+        print(f"\n{CYAN}{'=' * 50}{RESET}")
+        print(f"{BOLD}{BLUE}AVAILABLE WEBSITES{RESET}")
+        print(f"{CYAN}{'=' * 50}{RESET}")
 
-        selection = input("\nEnter site number (or 'x' to cancel): ").strip()
+        for i, (path, site) in enumerate(all_sites, 1):
+            print(f"{CYAN}{i}.{RESET} {BOLD}{site}{RESET} {YELLOW}(in {path}){RESET}")
+
+        selection = input(f"\n{GREEN}Enter site number (or 'x' to cancel):{RESET} ").strip()
         if selection.lower() == 'x':
             print("Cancelled.")
             return 0
@@ -574,17 +691,31 @@ def main():
         target_dir = os.path.abspath(target_dir)
 
     # Security warnings
-    print("\n############################################")
-    print("#          WARNING: NETWORK EXPOSURE         #")
-    print("############################################")
-    print("# This script makes the specified directory:")
-    print(f"#  '{target_dir}'")
-    print("# accessible to ALL devices on your local network.")
-    print("#")
-    print("# - Ensure you trust your network environment.")
-    print("# - Do NOT serve directories containing sensitive data.")
-    print("# - Stop the server (Ctrl+C) when finished.")
-    print("############################################\n")
+    # Define colors for Windows and Unix-like systems
+    if platform.system().lower() == "windows":
+        # Windows doesn't support ANSI colors in standard console
+        RED = ""
+        YELLOW = ""
+        RESET = ""
+        BOLD = ""
+    else:
+        # ANSI color codes for Unix-like systems
+        RED = "\033[91m"
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+        BOLD = "\033[1m"
+
+    print(f"\n{RED}{'#' * 50}{RESET}")
+    print(f"{RED}#{' ' * 10}{BOLD}WARNING: NETWORK EXPOSURE{RESET}{RED}{' ' * 9}#{RESET}")
+    print(f"{RED}{'#' * 50}{RESET}")
+    print(f"{RED}# {RESET}This script makes the specified directory:")
+    print(f"{RED}# {RESET} '{YELLOW}{target_dir}{RESET}'")
+    print(f"{RED}# {RESET}accessible to {BOLD}ALL{RESET} devices on your local network.")
+    print(f"{RED}#{RESET}")
+    print(f"{RED}# {RESET}- Ensure you trust your network environment.")
+    print(f"{RED}# {RESET}- Do {BOLD}NOT{RESET} serve directories containing sensitive data.")
+    print(f"{RED}# {RESET}- Stop the server (Ctrl+C) when finished.")
+    print(f"{RED}{'#' * 50}{RESET}\n")
 
     try:
         # Start the server
