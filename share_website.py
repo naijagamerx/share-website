@@ -249,6 +249,9 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
                     self.log_message(f"Found web root: {web_root_path}")
                     break
 
+        # Add a query parameter to force PHP processing
+        query_param = "?siteshare=1" if self.path.endswith('.php') else ""
+
         # Construct the target URL
         if is_in_web_root:
             # We're in a web server document root, so we can calculate the relative path
@@ -259,21 +262,27 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             rel_path = rel_path.strip('/')
             # Forward the request to the PHP server with the relative path
             if rel_path:
-                target_url = f"http://localhost:{self.php_server_port}/{rel_path}{self.path}"
+                target_url = f"http://localhost:{self.php_server_port}/{rel_path}{self.path}{query_param}"
             else:
                 # We're at the web root itself
-                target_url = f"http://localhost:{self.php_server_port}{self.path}"
+                target_url = f"http://localhost:{self.php_server_port}{self.path}{query_param}"
             self.log_message(f"Directory is in web root: {web_root_path}, relative path: {rel_path}")
         else:
             # Not in a known web root, try using the directory name directly
             # This might not work if the PHP server doesn't have this directory in its document root
             base_dir_name = os.path.basename(os.path.normpath(abs_dir))
-            target_url = f"http://localhost:{self.php_server_port}/{base_dir_name}{self.path}"
+            target_url = f"http://localhost:{self.php_server_port}/{base_dir_name}{self.path}{query_param}"
             self.log_message(f"Directory is not in a known web root, using base name: {base_dir_name}")
 
         # --- Log Proxy Action ---
         # Use log_message for consistent formatting and color
-        self.log_message(f"Proxying {method} {self.path} -> {target_url}")
+        # For PHP files, show detailed logs. For other files, show minimal logs
+        if self.path.endswith('.php'):
+            self.log_message(f"Proxying PHP: {method} {self.path} -> {target_url}")
+        else:
+            # Only log non-PHP requests if they're not common static files
+            if not any(self.path.endswith(ext) for ext in ['.css', '.js', '.jpg', '.jpeg', '.png', '.gif', '.ico', '.svg']):
+                self.log_message(f"Proxying: {method} {self.path}")
 
         try:
             # --- Prepare Request ---
@@ -283,6 +292,11 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             if self.path.endswith('.php'):
                 headers['X-Requested-With'] = 'XMLHttpRequest'
                 headers['Accept'] = 'text/html,application/xhtml+xml,application/xml'
+                headers['X-SiteShare-PHP-Proxy'] = '1'
+                headers['X-SiteShare-Version'] = VERSION
+                # Add more detailed debugging for PHP files
+                self.log_message(f"PHP file detected: {self.path}")
+                self.log_message(f"Headers: {headers}")
 
             # Read the request body for POST requests
             content_length = int(self.headers.get('Content-Length', 0))
@@ -303,10 +317,33 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
 
                 # Copy the response status and headers from PHP server
                 self.send_response(response.status)
+
+                # Get content type from PHP server
+                content_type = None
+                for header, value in response.getheaders():
+                    if header.lower() == 'content-type':
+                        content_type = value
+                        break
+
+                # Fix content type for PHP files if needed
+                if self.path.endswith('.php') and (not content_type or 'text/html' not in content_type):
+                    content_type = 'text/html; charset=UTF-8'
+                    self.log_message(f"Fixed content type for PHP file: {content_type}")
+
+                # Copy headers from PHP server
                 for header, value in response.getheaders():
                     # Avoid copying headers that interfere with proxying
                     if header.lower() not in ('transfer-encoding', 'connection', 'content-encoding'):
-                        self.send_header(header, value)
+                        # Use our fixed content type if needed
+                        if header.lower() == 'content-type' and content_type:
+                            self.send_header(header, content_type)
+                        else:
+                            self.send_header(header, value)
+
+                # Make sure content type is set if not provided by PHP server
+                if content_type and not any(h.lower() == 'content-type' for h, _ in response.getheaders()):
+                    self.send_header('Content-Type', content_type)
+
                 self.end_headers()
 
                 # Copy the response body from PHP server to client
