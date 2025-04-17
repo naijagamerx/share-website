@@ -234,7 +234,7 @@ class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
 
         # Check if there's an index file in the current directory
         if self.path == '/' or self.path == '/index.html':
-            for index_file in ['index.html', 'index.htm', 'default.html', 'default.htm']:
+            for index_file in ['index.html', 'index.htm', 'index.php', 'default.html', 'default.htm', 'default.php']:
                 index_path = os.path.join(self.directory, index_file)
                 if os.path.exists(index_path):
                     # Use the standard behavior to serve the index file
