@@ -25,6 +25,8 @@ SiteShare is a user-friendly Python utility that makes it easy to share local we
 
 ### Quick Start (Run Without Installing)
 
+You can run SiteShare directly without downloading the full repository:
+
 **Windows (PowerShell):**
 ```powershell
 irm https://raw.githubusercontent.com/naijagamerx/share-website/main/install.ps1 | iex
@@ -35,7 +37,7 @@ irm https://raw.githubusercontent.com/naijagamerx/share-website/main/install.ps1
 curl -sSL https://raw.githubusercontent.com/naijagamerx/share-website/main/install.sh | bash
 ```
 
-This will download and run SiteShare directly without installing anything permanently.
+This will download and run the script temporarily. For regular use, we recommend installing the full repository as described below.
 
 ### For Non-Technical Users
 
