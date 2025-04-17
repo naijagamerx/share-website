@@ -147,6 +147,25 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
         # For root requests, we'll let the PHP server handle it directly
         # If the PHP server returns 404, we'll show the welcome page (handled in error section)
 
+        # Security check: Ensure the request is within the shared directory
+        # Get the base directory name from the full path
+        base_dir_name = os.path.basename(os.path.normpath(self.directory))
+
+        # Check if the path starts with the base directory or is at the root
+        if self.path == '/':
+            # For root path, redirect to the shared directory
+            self.send_response(302)  # Found/Redirect
+            self.send_header('Location', f'/{base_dir_name}/')
+            self.end_headers()
+            return
+        elif not (self.path.startswith(f'/{base_dir_name}/') or self.path == f'/{base_dir_name}'):
+            print(f"Security block: Attempted access to {self.path} outside of shared directory {base_dir_name}")
+            self.send_response(403)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b"<html><body><h1>403 Forbidden</h1><p>Access is restricted to the shared directory.</p></body></html>")
+            return
+
         # Forward the request to the PHP server (using localhost is most reliable for local proxying)
         target_url = f"http://localhost:{self.php_server_port}{self.path}"
 
@@ -264,8 +283,31 @@ class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(bytes(str(info).replace("'", '"'), 'utf-8'))
             return
 
-        # Serve welcome page ONLY for root request IF no index file exists
-        if self.path == '/':
+        # Security check: For root directory sharing, allow all paths
+        # For specific directory sharing, restrict to that directory
+        if self.directory != '.' and self.directory != './':
+            # Get the base directory name from the full path
+            base_dir_name = os.path.basename(os.path.normpath(self.directory))
+
+            # If the path doesn't start with the base directory and isn't the root, block it
+            if self.path == '/':
+                # For root path, redirect to the shared directory
+                self.send_response(302)  # Found/Redirect
+                self.send_header('Location', f'/{base_dir_name}/')
+                self.end_headers()
+                return
+            elif not (self.path.startswith(f'/{base_dir_name}/') or self.path == f'/{base_dir_name}'):
+                print(f"Security block: Attempted access to {self.path} outside of shared directory {base_dir_name}")
+                self.send_response(403)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write(b"<html><body><h1>403 Forbidden</h1><p>Access is restricted to the shared directory.</p></body></html>")
+                return
+
+        # Serve welcome page for specific paths
+        # Note: Root path '/' is already handled above with redirection
+        base_dir_name = os.path.basename(os.path.normpath(self.directory))
+        if self.path == f'/{base_dir_name}/' or self.path == f'/{base_dir_name}':
             has_index = False
             for index_file in ['index.html', 'index.htm', 'index.php', 'default.html', 'default.htm', 'default.php']:
                 if os.path.exists(os.path.join(self.directory, index_file)):
