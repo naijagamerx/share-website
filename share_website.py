@@ -144,16 +144,8 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(bytes(str(info).replace("'", '"'), 'utf-8'))
             return
 
-        # Serve welcome page for root requests if welcome.html exists in script directory
-        if self.path == '/' or self.path == '/index.html':
-            welcome_path = os.path.join(self.script_dir, 'welcome.html')
-            if os.path.exists(welcome_path):
-                self.send_response(200)
-                self.send_header('Content-type', 'text/html')
-                self.end_headers()
-                with open(welcome_path, 'rb') as file:
-                    self.wfile.write(file.read())
-                return
+        # For root requests, we'll let the PHP server handle it directly
+        # If the PHP server returns 404, we'll show the welcome page (handled in error section)
 
         # Forward the request to the PHP server
         target_url = f"http://localhost:{self.php_server_port}{self.path}"
@@ -187,6 +179,18 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
                 shutil.copyfileobj(response, self.wfile)
 
         except urllib.error.HTTPError as e:
+            # If we get a 404 for the root path, try to show the welcome page
+            if e.code == 404 and (self.path == '/' or self.path == '/index.html'):
+                welcome_path = os.path.join(self.script_dir, 'welcome.html')
+                if os.path.exists(welcome_path):
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/html')
+                    self.end_headers()
+                    with open(welcome_path, 'rb') as file:
+                        self.wfile.write(file.read())
+                    return
+
+            # Otherwise, pass through the error
             self.send_response(e.code)
             for header, value in e.headers.items():
                 if header.lower() not in ('transfer-encoding', 'connection'):
@@ -228,8 +232,15 @@ class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(bytes(str(info).replace("'", '"'), 'utf-8'))
             return
 
-        # Serve welcome page for root requests if welcome.html exists in script directory
+        # Check if there's an index file in the current directory
         if self.path == '/' or self.path == '/index.html':
+            for index_file in ['index.html', 'index.htm', 'default.html', 'default.htm']:
+                index_path = os.path.join(self.directory, index_file)
+                if os.path.exists(index_path):
+                    # Use the standard behavior to serve the index file
+                    return super().do_GET()
+
+            # If no index file exists, serve the welcome page
             welcome_path = os.path.join(self.script_dir, 'welcome.html')
             if os.path.exists(welcome_path):
                 self.send_response(200)
