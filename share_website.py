@@ -161,8 +161,13 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
     Handler that proxies requests to a local PHP server.
     """
     php_server_port = None
-    directory = None
+    directory = None # Base directory being shared
     script_dir = None
+
+    def __init__(self, *args, **kwargs):
+        # Note: The 'directory' attribute is set by run_server before handler instantiation
+        # We don't need to pass it to the superclass init for BaseHTTPRequestHandler
+        super().__init__(*args, **kwargs)
 
     def do_GET(self):
         return self.proxy_request('GET')
@@ -188,54 +193,17 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(bytes(str(info).replace("'", '"'), 'utf-8'))
             return
 
-        # For root requests, we'll let the PHP server handle it directly
-        # If the PHP server returns 404, we'll show the welcome page (handled in error section)
+        # --- Construct Target URL ---
+        # Forward the request path directly to the PHP server
+        # The PHP server itself should handle routing based on its document root
+        target_url = f"http://localhost:{self.php_server_port}{self.path}"
 
-        # Security check: Ensure the request is within the shared directory
-        # Get the base directory name from the full path
-        base_dir_name = os.path.basename(os.path.normpath(self.directory))
-
-        # Check if the path starts with the base directory or is at the root
-        if self.path == '/':
-            # For root path, redirect to the shared directory
-            self.send_response(302)  # Found/Redirect
-            self.send_header('Location', f'/{base_dir_name}/')
-            self.end_headers()
-            return
-        elif not (self.path.startswith(f'/{base_dir_name}/') or self.path == f'/{base_dir_name}'):
-            print(f"Security block: Attempted access to {self.path} outside of shared directory {base_dir_name}")
-            self.send_response(403)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            self.wfile.write(b"<html><body><h1>403 Forbidden</h1><p>Access is restricted to the shared directory.</p></body></html>")
-            return
-
-        # Forward the request to the PHP server (using localhost is most reliable for local proxying)
-        # For paths that include the base directory name, we need to strip it when forwarding to PHP server
-        base_dir_name = os.path.basename(os.path.normpath(self.directory))
-        php_path = self.path
-
-        # If the path starts with the base directory name, strip it to access the correct files
-        if self.path.startswith(f'/{base_dir_name}/') or self.path == f'/{base_dir_name}':
-            # Remove the base directory name from the path
-            php_path = self.path[len(f'/{base_dir_name}'):]
-            # If the resulting path is empty, use root
-            if not php_path:
-                php_path = '/'
-            print(f"Remapped path from {self.path} to {php_path} for PHP server")
-
-        target_url = f"http://localhost:{self.php_server_port}{php_path}"
-
-        # Special handling for PHP files - add query string to force PHP processing
-        if self.path.endswith('.php') and '?' not in self.path:
-            target_url += '?siteshare=1'  # Add a dummy parameter to ensure PHP processing
-
-        # Only print debug info for PHP files or errors
-        if self.path.endswith('.php'):
-            print(f"Proxying {method} request for {self.path} to {target_url}") # Debug
+        # --- Log Proxy Action ---
+        # Use log_message for consistent formatting and color
+        self.log_message(f"Proxying {method} {self.path} -> {target_url}")
 
         try:
-            # Create a request to the PHP server
+            # --- Prepare Request ---
             headers = {key: value for key, value in self.headers.items()}
 
             # Add special headers to help with PHP processing
@@ -255,76 +223,102 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
                 method=method
             )
 
-            # Send the request to the PHP server
-            if self.path.endswith('.php'):
-                print(f"Sending request to PHP server: {target_url}") # Debug
-            with urllib.request.urlopen(req) as response:
-                # Copy the response status and headers
+            # --- Send Request and Handle Response ---
+            with urllib.request.urlopen(req, timeout=10) as response: # Added timeout
+                # Log PHP server response status
+                self.log_message(f"PHP Server ({target_url}) responded: {response.status}")
+
+                # Copy the response status and headers from PHP server
                 self.send_response(response.status)
-                if self.path.endswith('.php'):
-                    print(f"PHP server responded with status: {response.status}") # Debug
-
-                # Set content type based on file extension for PHP files
-                content_type = None
                 for header, value in response.getheaders():
-                    if header.lower() == 'content-type':
-                        content_type = value
-                        if self.path.endswith('.php'):
-                            print(f"Content-Type from PHP server: {value}") # Debug
-                    if header.lower() not in ('transfer-encoding', 'connection'):
+                    # Avoid copying headers that interfere with proxying
+                    if header.lower() not in ('transfer-encoding', 'connection', 'content-encoding'):
                         self.send_header(header, value)
-
-                # If PHP file is requested but content-type is not set correctly, fix it
-                if self.path.endswith('.php') and (not content_type or 'octet-stream' in content_type):
-                    print(f"Fixing content type for PHP file") # Debug
-                    self.send_header('Content-type', 'text/html')
-
                 self.end_headers()
 
-                # Copy the response body
-                shutil.copyfileobj(response, self.wfile)
+                # Copy the response body from PHP server to client
+                try:
+                    shutil.copyfileobj(response, self.wfile)
+                except (socket.timeout, ConnectionResetError, BrokenPipeError) as copy_err:
+                    # Log client-side errors during copy
+                    self.log_error(f"Client connection error during proxy response: {copy_err}")
 
         except urllib.error.HTTPError as e:
-            print(f"HTTP Error from PHP server: {e.code} {e.reason}") # Debug
-            # If we get a 404 for the root path, try to show the welcome page
-            if e.code == 404 and (self.path == '/' or self.path == '/index.html'):
+            # Log error from PHP server
+            self.log_error(f"HTTP Error from PHP server ({target_url}): {e.code} {e.reason}")
+
+            # --- Welcome Page Fallback on Root 404 ---
+            # If the PHP server returns 404 for the root path, try serving welcome.html
+            if e.code == HTTPStatus.NOT_FOUND and self.path == '/':
                 welcome_path = os.path.join(self.script_dir, 'welcome.html')
                 if os.path.exists(welcome_path):
-                    self.send_response(200)
-                    self.send_header('Content-type', 'text/html')
-                    self.end_headers()
-                    with open(welcome_path, 'rb') as file:
-                        self.wfile.write(file.read())
-                    return
+                    try:
+                        with open(welcome_path, 'rb') as file:
+                            self.send_response(HTTPStatus.OK)
+                            self.send_header('Content-type', 'text/html')
+                            self.end_headers()
+                            self.wfile.write(file.read())
+                            self.log_message("Served welcome.html as fallback for root 404")
+                        return # Served welcome page successfully
+                    except Exception as welcome_err:
+                        self.log_error(f"Error serving welcome page fallback: {welcome_err}")
+                        # Fall through to sending the original error if welcome page fails
 
-            # Otherwise, pass through the error
-            self.send_response(e.code)
+            # --- Pass Through PHP Server Error ---
+            # Otherwise, pass the original error from the PHP server to the client
+            self.send_response(e.code, e.reason)
             for header, value in e.headers.items():
-                if header.lower() not in ('transfer-encoding', 'connection'):
+                 if header.lower() not in ('transfer-encoding', 'connection', 'content-encoding'):
                     self.send_header(header, value)
             self.end_headers()
-            if e.fp:
-                shutil.copyfileobj(e.fp, self.wfile)
+            if e.fp: # If the error response has a body, copy it
+                try:
+                    shutil.copyfileobj(e.fp, self.wfile)
+                except (socket.timeout, ConnectionResetError, BrokenPipeError) as copy_err:
+                    self.log_error(f"Client connection error during proxy error response: {copy_err}")
 
         except Exception as e:
-            print(f"Exception in proxy request: {str(e)}") # Debug
-            self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            error_message = f"<html><body><h1>Error</h1><p>Failed to proxy request: {str(e)}</p></body></html>"
-            self.wfile.write(error_message.encode('utf-8'))
+            # Log general proxy errors
+            self.log_error(f"Exception during proxy request ({target_url}): {e}")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Proxy Error: {e}")
+
+    # Override log_message and log_error for consistent colored output
+    def log_message(self, format, *args):
+        """Log an arbitrary message with color."""
+        message = format % args
+        # Determine color based on message content (simple heuristic)
+        if "PHP Server" in message and "responded: 2" in message: # PHP 2xx
+             log_color = C_GREEN
+        elif "PHP Server" in message and "responded: 3" in message: # PHP 3xx
+             log_color = C_BLUE
+        elif "PHP Server" in message and ("responded: 4" in message or "responded: 5" in message): # PHP 4xx/5xx
+             log_color = C_YELLOW
+        elif "Proxying" in message:
+             log_color = C_CYAN
+        else:
+             log_color = C_DIM # Default
+
+        sys.stderr.write(f"{log_color}[{self.log_date_time_string()}] {message}{C_RESET}\n")
+
+    def log_error(self, format, *args):
+        """Log an error message in red."""
+        message = format % args
+        sys.stderr.write(f"{C_RED}[{self.log_date_time_string()}] ERROR: {message}{C_RESET}\n")
 
 class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
     """
-    Custom request handler for SiteShare.
+    Custom request handler for SiteShare (Static File Serving).
 
-    This handler serves a welcome page if the root directory is accessed and
-    provides information about the server via a special JSON endpoint.
+    Serves files relative to the specified directory and provides
+    a welcome page for root requests if no index file exists.
     """
     def __init__(self, *args, directory=None, **kwargs):
-        self.directory = directory
+        # Ensure directory is absolute for consistency and security
+        self.directory = os.path.abspath(directory if directory else ".")
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        super().__init__(*args, directory=directory, **kwargs)
+        # Pass the absolute directory to the parent class constructor
+        # SimpleHTTPRequestHandler will serve files relative to this directory
+        super().__init__(*args, directory=self.directory, **kwargs)
 
     def do_GET(self):
         # Special endpoint to get server information
@@ -340,66 +334,61 @@ class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(bytes(str(info).replace("'", '"'), 'utf-8'))
             return
 
-        # Security check: For root directory sharing, allow all paths
-        # For specific directory sharing, restrict to that directory
-        if self.directory != '.' and self.directory != './':
-            # Get the base directory name from the full path
-            base_dir_name = os.path.basename(os.path.normpath(self.directory))
-
-            # If the path doesn't start with the base directory and isn't the root, block it
-            if self.path == '/':
-                # For root path, redirect to the shared directory
-                self.send_response(302)  # Found/Redirect
-                self.send_header('Location', f'/{base_dir_name}/')
-                self.end_headers()
-                return
-            elif not (self.path.startswith(f'/{base_dir_name}/') or self.path == f'/{base_dir_name}'):
-                print(f"Security block: Attempted access to {self.path} outside of shared directory {base_dir_name}")
-                self.send_response(403)
-                self.send_header('Content-type', 'text/html')
-                self.end_headers()
-                self.wfile.write(b"<html><body><h1>403 Forbidden</h1><p>Access is restricted to the shared directory.</p></body></html>")
-                return
-
-            # For paths that include the base directory name, we need to modify the path
-            # to correctly serve files from the actual directory
-            if self.path.startswith(f'/{base_dir_name}/') or self.path == f'/{base_dir_name}':
-                # Store the original path for later use
-                original_path = self.path
-                # Remove the base directory name from the path
-                self.path = self.path[len(f'/{base_dir_name}'):]
-                # If the resulting path is empty, use root
-                if not self.path:
-                    self.path = '/'
-                print(f"Remapped path from {original_path} to {self.path} for static file serving")
-
-        # Serve welcome page for specific paths
-        # Note: Root path '/' is already handled above with redirection
-        base_dir_name = os.path.basename(os.path.normpath(self.directory))
-        if self.path == f'/{base_dir_name}/' or self.path == f'/{base_dir_name}':
+        # --- Welcome Page Logic ---
+        # Serve welcome page ONLY for root request IF no standard index file exists
+        # The parent handler (super().do_GET()) correctly looks for index files
+        # relative to self.directory.
+        if self.path == '/':
             has_index = False
+            # Check for standard index files within the serving directory
             for index_file in ['index.html', 'index.htm', 'index.php', 'default.html', 'default.htm', 'default.php']:
+                # Include PHP files in the check, even though they won't be processed in static mode
+                # This prevents showing the welcome page when an index.php exists
                 if os.path.exists(os.path.join(self.directory, index_file)):
                     has_index = True
                     break
 
             if not has_index:
+                # No index file found, try serving the custom welcome page
                 welcome_path = os.path.join(self.script_dir, 'welcome.html')
                 if os.path.exists(welcome_path):
                     try:
                         with open(welcome_path, 'rb') as file:
-                            self.send_response(200)
+                            self.send_response(HTTPStatus.OK)
                             self.send_header('Content-type', 'text/html')
                             self.end_headers()
                             self.wfile.write(file.read())
-                        return # Served welcome page
+                        return # Served welcome page successfully
                     except Exception as e:
                         self.log_error(f"Error serving welcome page: {e}")
-                        # Fall through to default handler if error occurs
+                        # Fall through to default handler if reading welcome page fails
 
-        # For all other requests (including root if index exists), use the standard behavior
-        # The base handler uses the 'directory' passed in __init__
+        # --- Default File Serving ---
+        # For all other requests (including '/' if an index file exists),
+        # rely on the parent SimpleHTTPRequestHandler's behavior.
+        # It correctly handles paths relative to self.directory.
+        # No need for the previous redirect or security checks here.
         super().do_GET()
+
+    # Override log_message to add color
+    def log_message(self, format, *args):
+        """Log an arbitrary message with color based on status code."""
+        message = format % args
+        try:
+            # Extract status code if available (usually the second arg)
+            code = int(args[1])
+            if 200 <= code < 300 or code == HTTPStatus.NOT_MODIFIED:
+                log_color = C_GREEN
+            elif 300 <= code < 400:
+                log_color = C_BLUE
+            elif 400 <= code < 500:
+                log_color = C_YELLOW
+            else: # 5xx or other errors
+                log_color = C_RED
+        except (IndexError, ValueError, TypeError):
+            log_color = C_DIM # Default color for non-standard messages
+
+        sys.stderr.write(f"{log_color}[{self.log_date_time_string()}] {message}{C_RESET}\n")
 
 def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -> None:
     """
@@ -458,86 +447,97 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
         # If PHP mode was requested but failed, this message is already shown
         if not php_mode: # Only print if PHP wasn't requested initially
              print(f"{C_GREEN}Using static file mode.{C_RESET}")
-        # Use our custom static file handler, passing the target directory
-        handler = lambda *args, **kwargs: SiteShareHandler(*args, directory=abs_dir_initial, **kwargs)
+        # Use our custom static file handler. It will now serve from '.' because we will chdir.
+        # No need to pass directory= here anymore.
+        handler = SiteShareHandler # Use the class directly
 
     # --- Start HTTP Server ---
-    address = ("", port) # Bind to all interfaces
-    max_retries = 3
-    retries = 0
+    original_cwd = os.getcwd() # Store original directory
+    try:
+        os.chdir(abs_dir_initial) # Change to the target directory
+        print(f"{C_DIM}Changed working directory to: {abs_dir_initial}{C_RESET}")
 
-    while retries < max_retries:
-        try:
-            # Use ThreadingHTTPServer for better handling of multiple requests
-            with http.server.ThreadingHTTPServer(address, handler) as httpd:
-                local_ip = get_local_ip()
-                # abs_dir = os.path.abspath(directory) # Already got abs_dir_initial
+        address = ("", port) # Bind to all interfaces
+        max_retries = 3
+        retries = 0
 
-                print_separator("═", 60, C_BLUE)
-                print(f"{C_GREEN}Server started successfully!{C_RESET}")
-                print(f"{C_WHITE}Serving from: {C_BOLD}{abs_dir_initial}{C_RESET}")
-                print(f"  {C_CYAN}Local:  {C_BOLD}http://localhost:{port}{C_RESET}")
-                print(f"  {C_CYAN}Network:{C_BOLD} http://{local_ip}:{port}{C_RESET}")
-                print_separator("-", 40, C_DIM)
-                print(f"{C_YELLOW}Important Notes:{C_RESET}")
-                print(f"{C_DIM}  - 'localhost' only works on this machine.{C_RESET}")
-                print(f"{C_DIM}  - Other devices MUST use the Network IP ({local_ip}).{C_RESET}")
-                print(f"{C_DIM}  - Ensure firewall allows connections on port {port}.{C_RESET}")
-                print_separator("═", 60, C_BLUE)
-                print(f"\n{C_MAGENTA}Press {C_BOLD}Ctrl+C{C_RESET}{C_MAGENTA} to stop the server.{C_RESET}")
+        while retries < max_retries:
+            try:
+                # Use ThreadingHTTPServer for better handling of multiple requests
+                # The handler will now serve files relative to the new CWD (abs_dir_initial)
+                with http.server.ThreadingHTTPServer(address, handler) as httpd:
+                    local_ip = get_local_ip()
 
-                httpd.serve_forever() # Blocks here until interrupted
+                    print_separator("═", 60, C_BLUE)
+                    print(f"{C_GREEN}Server started successfully!{C_RESET}")
+                    print(f"{C_WHITE}Serving from: {C_BOLD}{abs_dir_initial}{C_RESET}") # Now CWD
+                    print(f"  {C_CYAN}Local:  {C_BOLD}http://localhost:{port}{C_RESET}")
+                    print(f"  {C_CYAN}Network:{C_BOLD} http://{local_ip}:{port}{C_RESET}")
+                    print_separator("-", 40, C_DIM)
+                    print(f"{C_YELLOW}Important Notes:{C_RESET}")
+                    print(f"{C_DIM}  - 'localhost' only works on this machine.{C_RESET}")
+                    print(f"{C_DIM}  - Other devices MUST use the Network IP ({local_ip}).{C_RESET}")
+                    print(f"{C_DIM}  - Ensure firewall allows connections on port {port}.{C_RESET}")
+                    print_separator("═", 60, C_BLUE)
+                    print(f"\n{C_MAGENTA}Press {C_BOLD}Ctrl+C{C_RESET}{C_MAGENTA} to stop the server.{C_RESET}")
 
-        except OSError as e:
-            if e.errno in (errno.EADDRINUSE, 98, 48, 10048): # Address already in use
-                retries += 1
-                print(f"\n{C_RED}Error: Port {C_BOLD}{port}{C_RESET}{C_RED} is already in use.{C_RESET}")
-                if retries < max_retries:
-                    try:
-                        prompt = (f"{C_YELLOW}Enter a different port (attempt {retries}/{max_retries-1}) "
-                                  f"or press Enter to exit: {C_RESET}")
-                        new_port_str = input(prompt)
-                        if not new_port_str:
-                            print(f"{C_BLUE}Exiting.{C_RESET}")
-                            sys.exit(1)
-                        new_port = int(new_port_str)
-                        if 1 <= new_port <= 65535:
-                            port = new_port
-                            address = ("", port) # Update address tuple for next attempt
-                            print(f"{C_BLUE}Retrying with port {C_BOLD}{port}{C_RESET}{C_BLUE}...{C_RESET}")
-                        else:
-                            print(f"{C_RED}Invalid port number. Must be between 1 and 65535.{C_RESET}")
+                    httpd.serve_forever() # Blocks here until interrupted
+
+            except OSError as e:
+                if e.errno in (errno.EADDRINUSE, 98, 48, 10048): # Address already in use
+                    retries += 1
+                    print(f"\n{C_RED}Error: Port {C_BOLD}{port}{C_RESET}{C_RED} is already in use.{C_RESET}")
+                    if retries < max_retries:
+                        try:
+                            prompt = (f"{C_YELLOW}Enter a different port (attempt {retries}/{max_retries-1}) "
+                                      f"or press Enter to exit: {C_RESET}")
+                            new_port_str = input(prompt)
+                            if not new_port_str:
+                                print(f"{C_BLUE}Exiting.{C_RESET}")
+                                sys.exit(1)
+                            new_port = int(new_port_str)
+                            if 1 <= new_port <= 65535:
+                                port = new_port
+                                address = ("", port) # Update address tuple for next attempt
+                                print(f"{C_BLUE}Retrying with port {C_BOLD}{port}{C_RESET}{C_BLUE}...{C_RESET}")
+                            else:
+                                print(f"{C_RED}Invalid port number. Must be between 1 and 65535.{C_RESET}")
+                                retries -= 1 # Decrement because this wasn't a valid port attempt
+                        except ValueError:
+                            print(f"{C_RED}Invalid input. Please enter a number.{C_RESET}")
                             retries -= 1 # Decrement because this wasn't a valid port attempt
-                    except ValueError:
-                        print(f"{C_RED}Invalid input. Please enter a number.{C_RESET}")
-                        retries -= 1 # Decrement because this wasn't a valid port attempt
+                    else:
+                        print(f"{C_RED}Maximum retry attempts reached. Exiting.{C_RESET}")
+                        sys.exit(1) # Exit after max retries for port conflict
+                elif e.errno in (errno.EACCES, 13): # Permission denied
+                    print(f"\n{C_RED}Error: Permission denied to use port {C_BOLD}{port}{C_RESET}{C_RED}.{C_RESET}")
+                    print(f"{C_YELLOW}Try a port number above 1024 or run with administrator/root privileges.{C_RESET}")
+                    sys.exit(1) # Exit immediately on permission error
                 else:
-                    print(f"{C_RED}Maximum retry attempts reached. Exiting.{C_RESET}")
-                    sys.exit(1) # Exit after max retries for port conflict
-            elif e.errno in (errno.EACCES, 13): # Permission denied
-                print(f"\n{C_RED}Error: Permission denied to use port {C_BOLD}{port}{C_RESET}{C_RED}.{C_RESET}")
-                print(f"{C_YELLOW}Try a port number above 1024 or run with administrator/root privileges.{C_RESET}")
-                sys.exit(1) # Exit immediately on permission error
-            else:
-                # Catch other potential OS errors during server start
-                print(f"\n{C_BOLD}{C_RED}An unexpected OS error occurred: {e}{C_RESET}")
-                sys.exit(1) # Exit on other OS errors
+                    # Catch other potential OS errors during server start
+                    print(f"\n{C_BOLD}{C_RED}An unexpected OS error occurred: {e}{C_RESET}")
+                    sys.exit(1) # Exit on other OS errors
 
-        except KeyboardInterrupt:
-            # Handle Ctrl+C gracefully
-            print(f"\n{C_MAGENTA}Stopping the server...{C_RESET}")
-            break # Exit the while loop
+            except KeyboardInterrupt:
+                # Handle Ctrl+C gracefully
+                print(f"\n{C_MAGENTA}Stopping the server...{C_RESET}")
+                break # Exit the while loop
 
-        except Exception as e:
-            # Catch any other unexpected errors during server setup/run
-            print(f"\n{C_BOLD}{C_RED}An unexpected error occurred: {e}{C_RESET}")
-            sys.exit(1) # Exit on general errors
+            except Exception as e:
+                # Catch any other unexpected errors during server setup/run
+                print(f"\n{C_BOLD}{C_RED}An unexpected error occurred: {e}{C_RESET}")
+                sys.exit(1) # Exit on general errors
 
-    # This part is reached if the loop finishes without starting (e.g., max retries exceeded)
-    # However, sys.exit(1) is called within the loop for port conflicts now.
-    # Keep it just in case, though it might be unreachable.
-    if retries >= max_retries:
-         print(f"{C_BOLD}{C_RED}Failed to start server after multiple attempts.{C_RESET}")
+        # This part is reached if the loop finishes without starting (e.g., max retries exceeded)
+        if retries >= max_retries:
+             print(f"{C_BOLD}{C_RED}Failed to start server after multiple attempts.{C_RESET}")
+
+    finally:
+        # --- Change back to original directory ---
+        # This block executes whether the try block completed successfully,
+        # raised an exception, or was interrupted (like Ctrl+C).
+        os.chdir(original_cwd)
+        print(f"\n{C_DIM}Restored working directory to: {original_cwd}{C_RESET}")
 
 def print_banner():
     """Prints the application banner with ASCII art and metadata."""
