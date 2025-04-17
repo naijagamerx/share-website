@@ -193,6 +193,19 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(bytes(str(info).replace("'", '"'), 'utf-8'))
             return
 
+        # --- Special handling for root path ---
+        # If accessing the root path, check if we have an index file
+        if self.path == '/':
+            # Check for standard index files within the serving directory
+            for index_file in ['index.php', 'index.html', 'index.htm', 'default.php', 'default.html', 'default.htm']:
+                index_path = os.path.join(os.getcwd(), index_file)
+                if os.path.exists(index_path):
+                    self.log_message(f"Found index file: {index_path} for root path")
+                    # If we found index.php, use it directly
+                    if index_file.endswith('.php'):
+                        self.path = f'/{index_file}'
+                    break
+
         # --- Construct Target URL ---
         # Forward the request path directly to the PHP server
         # The PHP server itself should handle routing based on its document root
@@ -248,21 +261,32 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             self.log_error(f"HTTP Error from PHP server ({target_url}): {e.code} {e.reason}")
 
             # --- Welcome Page Fallback on Root 404 ---
-            # If the PHP server returns 404 for the root path, try serving welcome.html
+            # If the PHP server returns 404 for the root path, check for index files first
             if e.code == HTTPStatus.NOT_FOUND and self.path == '/':
-                welcome_path = os.path.join(self.script_dir, 'welcome.html')
-                if os.path.exists(welcome_path):
-                    try:
-                        with open(welcome_path, 'rb') as file:
-                            self.send_response(HTTPStatus.OK)
-                            self.send_header('Content-type', 'text/html')
-                            self.end_headers()
-                            self.wfile.write(file.read())
-                            self.log_message("Served welcome.html as fallback for root 404")
-                        return # Served welcome page successfully
-                    except Exception as welcome_err:
-                        self.log_error(f"Error serving welcome page fallback: {welcome_err}")
-                        # Fall through to sending the original error if welcome page fails
+                # Check for standard index files within the serving directory
+                has_index = False
+                for index_file in ['index.html', 'index.htm', 'index.php', 'default.html', 'default.htm', 'default.php']:
+                    index_path = os.path.join(os.getcwd(), index_file)
+                    if os.path.exists(index_path):
+                        has_index = True
+                        self.log_message(f"Found index file: {index_path}, but PHP server returned 404")
+                        break
+
+                # Only show welcome page if no index files exist
+                if not has_index:
+                    welcome_path = os.path.join(self.script_dir, 'welcome.html')
+                    if os.path.exists(welcome_path):
+                        try:
+                            with open(welcome_path, 'rb') as file:
+                                self.send_response(HTTPStatus.OK)
+                                self.send_header('Content-type', 'text/html')
+                                self.end_headers()
+                                self.wfile.write(file.read())
+                                self.log_message("Served welcome.html as fallback for root 404")
+                            return # Served welcome page successfully
+                        except Exception as welcome_err:
+                            self.log_error(f"Error serving welcome page fallback: {welcome_err}")
+                            # Fall through to sending the original error if welcome page fails
 
             # --- Pass Through PHP Server Error ---
             # Otherwise, pass the original error from the PHP server to the client
@@ -344,8 +368,10 @@ class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
             for index_file in ['index.html', 'index.htm', 'index.php', 'default.html', 'default.htm', 'default.php']:
                 # Include PHP files in the check, even though they won't be processed in static mode
                 # This prevents showing the welcome page when an index.php exists
-                if os.path.exists(os.path.join(self.directory, index_file)):
+                index_path = os.path.join(self.directory, index_file)
+                if os.path.exists(index_path):
                     has_index = True
+                    print(f"Found index file: {index_path}")
                     break
 
             if not has_index:
@@ -447,9 +473,9 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
         # If PHP mode was requested but failed, this message is already shown
         if not php_mode: # Only print if PHP wasn't requested initially
              print(f"{C_GREEN}Using static file mode.{C_RESET}")
-        # Use our custom static file handler. It will now serve from '.' because we will chdir.
-        # No need to pass directory= here anymore.
-        handler = SiteShareHandler # Use the class directly
+        # Use our custom static file handler, passing the directory
+        # We need to pass directory="." since we're changing to the target directory
+        handler = lambda *args, **kwargs: SiteShareHandler(*args, directory=".", **kwargs)
 
     # --- Start HTTP Server ---
     original_cwd = os.getcwd() # Store original directory
