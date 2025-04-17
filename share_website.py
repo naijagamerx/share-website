@@ -147,12 +147,23 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
         # For root requests, we'll let the PHP server handle it directly
         # If the PHP server returns 404, we'll show the welcome page (handled in error section)
 
-        # Forward the request to the PHP server
+        # Forward the request to the PHP server (using localhost is most reliable for local proxying)
         target_url = f"http://localhost:{self.php_server_port}{self.path}"
+
+        # Special handling for PHP files - add query string to force PHP processing
+        if self.path.endswith('.php') and '?' not in self.path:
+            target_url += '?siteshare=1'  # Add a dummy parameter to ensure PHP processing
+
+        print(f"Proxying {method} request for {self.path} to {target_url}") # Debug
 
         try:
             # Create a request to the PHP server
             headers = {key: value for key, value in self.headers.items()}
+
+            # Add special headers to help with PHP processing
+            if self.path.endswith('.php'):
+                headers['X-Requested-With'] = 'XMLHttpRequest'
+                headers['Accept'] = 'text/html,application/xhtml+xml,application/xml'
 
             # Read the request body for POST requests
             content_length = int(self.headers.get('Content-Length', 0))
@@ -167,20 +178,24 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
             )
 
             # Send the request to the PHP server
+            print(f"Sending request to PHP server: {target_url}") # Debug
             with urllib.request.urlopen(req) as response:
                 # Copy the response status and headers
                 self.send_response(response.status)
+                print(f"PHP server responded with status: {response.status}") # Debug
 
                 # Set content type based on file extension for PHP files
                 content_type = None
                 for header, value in response.getheaders():
                     if header.lower() == 'content-type':
                         content_type = value
+                        print(f"Content-Type from PHP server: {value}") # Debug
                     if header.lower() not in ('transfer-encoding', 'connection'):
                         self.send_header(header, value)
 
                 # If PHP file is requested but content-type is not set correctly, fix it
                 if self.path.endswith('.php') and (not content_type or 'octet-stream' in content_type):
+                    print(f"Fixing content type for PHP file") # Debug
                     self.send_header('Content-type', 'text/html')
 
                 self.end_headers()
@@ -189,6 +204,7 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
                 shutil.copyfileobj(response, self.wfile)
 
         except urllib.error.HTTPError as e:
+            print(f"HTTP Error from PHP server: {e.code} {e.reason}") # Debug
             # If we get a 404 for the root path, try to show the welcome page
             if e.code == 404 and (self.path == '/' or self.path == '/index.html'):
                 welcome_path = os.path.join(self.script_dir, 'welcome.html')
@@ -210,6 +226,7 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
                 shutil.copyfileobj(e.fp, self.wfile)
 
         except Exception as e:
+            print(f"Exception in proxy request: {str(e)}") # Debug
             self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
             self.send_header('Content-type', 'text/html')
             self.end_headers()
@@ -242,26 +259,31 @@ class SiteShareHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(bytes(str(info).replace("'", '"'), 'utf-8'))
             return
 
-        # Check if there's an index file in the current directory
-        if self.path == '/' or self.path == '/index.html':
+        # Serve welcome page ONLY for root request IF no index file exists
+        if self.path == '/':
+            has_index = False
             for index_file in ['index.html', 'index.htm', 'index.php', 'default.html', 'default.htm', 'default.php']:
-                index_path = os.path.join(self.directory, index_file)
-                if os.path.exists(index_path):
-                    # Use the standard behavior to serve the index file
-                    return super().do_GET()
+                if os.path.exists(os.path.join(self.directory, index_file)):
+                    has_index = True
+                    break
 
-            # If no index file exists, serve the welcome page
-            welcome_path = os.path.join(self.script_dir, 'welcome.html')
-            if os.path.exists(welcome_path):
-                self.send_response(200)
-                self.send_header('Content-type', 'text/html')
-                self.end_headers()
-                with open(welcome_path, 'rb') as file:
-                    self.wfile.write(file.read())
-                return
+            if not has_index:
+                welcome_path = os.path.join(self.script_dir, 'welcome.html')
+                if os.path.exists(welcome_path):
+                    try:
+                        with open(welcome_path, 'rb') as file:
+                            self.send_response(200)
+                            self.send_header('Content-type', 'text/html')
+                            self.end_headers()
+                            self.wfile.write(file.read())
+                        return # Served welcome page
+                    except Exception as e:
+                        self.log_error(f"Error serving welcome page: {e}")
+                        # Fall through to default handler if error occurs
 
-        # For all other requests, use the standard behavior
-        return super().do_GET()
+        # For all other requests (including root if index exists), use the standard behavior
+        # The base handler uses the 'directory' passed in __init__
+        super().do_GET()
 
 def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -> None:
     """
@@ -284,9 +306,10 @@ def run_server(directory: str = ".", port: int = 8000, php_mode: bool = False) -
         if not os.path.isdir(directory):
             print(f"Error: Directory not found: {directory}")
             sys.exit(1)
-        os.chdir(directory)
+        # os.chdir(directory) # No longer needed, handler uses the directory argument
     except OSError as e:
-        print(f"Error changing to directory {directory}: {e}")
+        # This check might not be strictly necessary anymore without chdir, but keep for safety
+        print(f"Error accessing directory {directory}: {e}")
         sys.exit(1)
 
     # Determine if we should use PHP mode
