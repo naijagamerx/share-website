@@ -63,6 +63,7 @@ def find_php_server():
     Detect if a PHP server (like MAMP or XAMPP) is running locally.
     Returns the port number if found, otherwise None.
     """
+    print(f"Checking for PHP server on ports: {', '.join(map(str, PHP_SERVER_PORTS))}")
     for port in PHP_SERVER_PORTS:
         try:
             # Try to connect to localhost on the port
@@ -70,16 +71,25 @@ def find_php_server():
                 s.settimeout(0.5)  # Short timeout
                 result = s.connect_ex(('127.0.0.1', port))
                 if result == 0:  # Port is open
+                    print(f"Found open port at {port}, checking if it's a web server...")
                     # Try to fetch the server header to confirm it's a web server
                     try:
                         response = urllib.request.urlopen(f"http://localhost:{port}", timeout=1)
                         server = response.info().get('Server', '')
+                        print(f"Server header: {server}")
                         if 'apache' in server.lower() or 'php' in server.lower() or 'nginx' in server.lower():
                             # Message is now printed in run_server after confirmation
+                            print(f"Confirmed PHP-capable server on port {port}")
                             return port # Return port, message handled later
-                    except Exception:
+                        else:
+                            print(f"Port {port} is open but doesn't appear to be a PHP-capable server")
+                    except Exception as e:
+                        print(f"Error checking port {port}: {e}")
                         pass  # Not a web server or couldn't connect
-        except Exception:
+                else:
+                    print(f"Port {port} is not open")
+        except Exception as e:
+            print(f"Exception checking port {port}: {e}")
             pass  # Couldn't check this port
 
     # Message printed in run_server if needed
@@ -211,9 +221,34 @@ class PHPProxyHandler(http.server.BaseHTTPRequestHandler):
         # Get the base directory name from the full path
         base_dir_name = os.path.basename(os.path.normpath(self.directory))
 
-        # Forward the request to the PHP server, including the base directory name
-        # This ensures we're accessing the correct directory on the PHP server
-        target_url = f"http://localhost:{self.php_server_port}/{base_dir_name}{self.path}"
+        # Check if the directory is in a web server path
+        is_in_web_root = False
+        web_root_path = ""
+        abs_dir = os.path.abspath(self.directory)
+
+        # Check all possible web server paths
+        for platform_paths in WEB_SERVER_PATHS.values():
+            for path in platform_paths:
+                if abs_dir.startswith(os.path.abspath(path)):
+                    is_in_web_root = True
+                    web_root_path = os.path.abspath(path)
+                    break
+            if is_in_web_root:
+                break
+
+        # Construct the target URL based on whether the directory is in a web server path
+        if is_in_web_root:
+            # Calculate the relative path from the web root
+            rel_path = os.path.relpath(abs_dir, web_root_path)
+            # Replace backslashes with forward slashes for URLs
+            rel_path = rel_path.replace('\\', '/')
+            # Forward the request to the PHP server with the relative path
+            target_url = f"http://localhost:{self.php_server_port}/{rel_path}{self.path}"
+            self.log_message(f"Directory is in web root: {web_root_path}, relative path: {rel_path}")
+        else:
+            # Not in web root, use the base directory name directly
+            target_url = f"http://localhost:{self.php_server_port}/{base_dir_name}{self.path}"
+            self.log_message(f"Directory is not in a known web root, using base name: {base_dir_name}")
 
         # --- Log Proxy Action ---
         # Use log_message for consistent formatting and color
